@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/hchauhan7816/hcdb/wal"
 )
@@ -116,6 +115,10 @@ func write(filePath string) {
 	walObj.Put("ct", "98")
 	walObj.Put("cu", "99")
 	walObj.Put("cv", "100")
+	walObj.Put("Harsh", "Chauhan")
+	walObj.Put("H", "arsh")
+	walObj.Put("Ha", "rsh")
+	walObj.Put("Harsh", "Chauhan")
 
 	// for i := 0; i < 10_000_000; i++ {
 	// 	walObj.Put("key", strings.Repeat("x", 1024))
@@ -153,8 +156,6 @@ func replay(filePath string) {
 }
 
 func main() {
-
-	// write("assets/main.wal")
+	write("assets/main.wal")
 	replay("assets/main.wal")
-
 }
