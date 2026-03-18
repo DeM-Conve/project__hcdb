@@ -6,7 +6,7 @@ import (
 	"hash/crc32"
 )
 
-// [totalLen][keyLen][valLen][key][value][crc32]
+// Format: [totalLen][type(1)][keyLen(4)][valLen(4)][key][value][crc32(4)]
 
 func (walObj *WAL) Append(entry Entry) error {
 
@@ -36,6 +36,10 @@ func (walObj *WAL) Append(entry Entry) error {
 
 func writeDataBuff(entry Entry) ([]byte, error) {
 	dataBuf := new(bytes.Buffer)
+
+	if err := binary.Write(dataBuf, binary.LittleEndian, entry.Type); err != nil {
+		return nil, err
+	}
 
 	keyLength := uint32(len(entry.Key))
 	valueLength := uint32(len(entry.Value))

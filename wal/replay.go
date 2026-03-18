@@ -1,13 +1,23 @@
 package wal
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/binary"
 	"fmt"
 	"hash/crc32"
 	"io"
 )
+
+type countingReader struct {
+	r   io.Reader
+	pos int64
+}
+
+func (c *countingReader) Read(p []byte) (n int, err error) {
+	n, err = c.r.Read(p)
+	c.pos += int64(n)
+	return
+}
 
 func (walObj *WAL) Replay() ([]Entry, error) {
 	if err := walObj.BufWriter.Flush(); err != nil {
@@ -18,17 +28,16 @@ func (walObj *WAL) Replay() ([]Entry, error) {
 		return nil, err
 	}
 
-	reader := bufio.NewReader(walObj.File)
-
+	// reader := bufio.NewReader(walObj.File)
+	cr := &countingReader{r: walObj.File}
 	var entries []Entry
-	var offset int64 = 0
 
 	for {
-		startOffset := offset
+		startOffset := cr.pos
 
 		// totalLength
 		var totalLength uint32
-		err := binary.Read(reader, binary.LittleEndian, &totalLength)
+		err := binary.Read(cr, binary.LittleEndian, &totalLength)
 		if err == io.EOF {
 			break
 		}
@@ -40,7 +49,7 @@ func (walObj *WAL) Replay() ([]Entry, error) {
 		}
 
 		// Validate Total Length
-		if totalLength > (4 + MAX_KEY_LENGTH + 4 + MAX_VALUE_LENGTH + 4) {
+		if totalLength > (1 + 4 + MAX_KEY_LENGTH + 4 + MAX_VALUE_LENGTH + 4) {
 			fmt.Println("Total length is greater than expected:", totalLength)
 			walObj.File.Truncate(startOffset)
 			break
@@ -48,7 +57,7 @@ func (walObj *WAL) Replay() ([]Entry, error) {
 
 		recordBuf := make([]byte, totalLength)
 
-		if _, err := io.ReadFull(reader, recordBuf); err != nil {
+		if _, err := io.ReadFull(cr, recordBuf); err != nil {
 			fmt.Println("Error reading record buffer:", err)
 			walObj.File.Truncate(startOffset)
 			break
@@ -76,6 +85,14 @@ func (walObj *WAL) Replay() ([]Entry, error) {
 
 		// Parse Data Part
 		buffReader := bytes.NewReader(dataPart)
+
+		var opType uint8
+
+		if err := binary.Read(buffReader, binary.LittleEndian, &opType); err != nil {
+			fmt.Println("Error reading type of event:", err)
+			walObj.File.Truncate(startOffset)
+			break
+		}
 
 		var keyLength uint32
 		var valueLength uint32
@@ -113,9 +130,7 @@ func (walObj *WAL) Replay() ([]Entry, error) {
 			break
 		}
 
-		entries = append(entries, Entry{Key: key, Value: value})
-
-		offset += int64(4 + totalLength)
+		entries = append(entries, Entry{Key: key, Value: value, Type: opType})
 	}
 
 	return entries, nil
