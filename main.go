@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/hchauhan7816/hcdb/wal"
 )
@@ -115,6 +116,10 @@ func write(filePath string) {
 	walObj.Put("ct", "98")
 	walObj.Put("cu", "99")
 	walObj.Put("cv", "100")
+
+	for i := 0; i < 10_000_000; i++ {
+		walObj.Put("key", strings.Repeat("x", 1024))
+	}
 
 	if err := walObj.Sync(); err != nil {
 		fmt.Println("Error in file sync")
