@@ -1,37 +1,43 @@
 package wal
 
 import (
+	"bufio"
 	"encoding/binary"
-	"os"
+	"fmt"
+	"io"
 )
 
 func (walObj *WAL) Replay() ([]Entry, error) {
-	defer walObj.File.Close()
+	walObj.BufWriter.Flush()
 
-	var file *os.File = walObj.File
 	var entries []Entry
+	fileReader := bufio.NewReader(walObj.File)
 
 	for {
 		var keyLength uint32
 		var valueLength uint32
 
-		if err := binary.Read(file, binary.LittleEndian, &keyLength); err != nil {
+		if err := binary.Read(fileReader, binary.LittleEndian, &keyLength); err != nil {
 			break
 		}
 
-		if err := binary.Read(file, binary.LittleEndian, &valueLength); err != nil {
-			break
+		if err := binary.Read(fileReader, binary.LittleEndian, &valueLength); err != nil {
+			return nil, fmt.Errorf("failed to read value length: %w", err)
+		}
+
+		if keyLength > MAX_KEY_LENGTH || valueLength > MAX_VALUE_LENGTH {
+			return nil, fmt.Errorf("invalid key or value length: keyLength=%d, valueLength=%d", keyLength, valueLength)
 		}
 
 		key := make([]byte, keyLength)
 		value := make([]byte, valueLength)
 
-		if _, err := file.Read(key); err != nil {
-			break
+		if _, err := io.ReadFull(fileReader, key); err != nil {
+			return nil, fmt.Errorf("failed to read key: %w", err)
 		}
 
-		if _, err := file.Read(value); err != nil {
-			break
+		if _, err := io.ReadFull(fileReader, value); err != nil {
+			return nil, fmt.Errorf("failed to read value: %w", err)
 		}
 
 		entries = append(entries, Entry{Key: key, Value: value})

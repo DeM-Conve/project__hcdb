@@ -136,7 +136,8 @@ func replay(filePath string) {
 
 	entries, err := walObj.Replay()
 	if err != nil {
-		fmt.Println("Error in Replay")
+		fmt.Println(err)
+		fmt.Println("Error in Replay!")
 	}
 
 	for _, entry := range entries {
@@ -146,7 +147,7 @@ func replay(filePath string) {
 
 func main() {
 
-	write("assets/main.wal")
+	// write("assets/main.wal")
 	replay("assets/main.wal")
 
 }

@@ -22,5 +22,9 @@ func (walObj *WAL) Append(entry Entry) error {
 		return err
 	}
 
+	if err := walObj.BufWriter.Flush(); err != nil {
+		return err
+	}
+
 	return nil
 }
