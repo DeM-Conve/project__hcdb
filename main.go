@@ -117,9 +117,9 @@ func write(filePath string) {
 	walObj.Put("cu", "99")
 	walObj.Put("cv", "100")
 
-	for i := 0; i < 10_000_000; i++ {
-		walObj.Put("key", strings.Repeat("x", 1024))
-	}
+	// for i := 0; i < 10_000_000; i++ {
+	// 	walObj.Put("key", strings.Repeat("x", 1024))
+	// }
 
 	if err := walObj.Sync(); err != nil {
 		fmt.Println("Error in file sync")
@@ -136,13 +136,15 @@ func replay(filePath string) {
 
 	walObj, err := wal.Open(filePath)
 	if err != nil {
-		fmt.Println("Error opening file for replay")
+		fmt.Println("Error opening file for replay:", err)
+		return
 	}
 
 	entries, err := walObj.Replay()
 	if err != nil {
 		fmt.Println(err)
 		fmt.Println("Error in Replay!")
+		return
 	}
 
 	for _, entry := range entries {
