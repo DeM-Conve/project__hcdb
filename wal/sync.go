@@ -6,6 +6,6 @@ func (walObj *WAL) Sync() error {
 		return err
 	}
 
-	return nil
+	return walObj.File.Sync()
 
 }
