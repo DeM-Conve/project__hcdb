@@ -75,7 +75,7 @@ func (memTable *MemTable) Size() int {
 
 func (memTable *MemTable) Ascend(fn func(key, value []byte, itemType uint8) bool) {
 	memTable.mut.RLock()
-	defer memTable.mut.Unlock()
+	defer memTable.mut.RUnlock()
 
 	memTable.tree.Ascend(func(i btree.Item) bool {
 		item := i.(Item)

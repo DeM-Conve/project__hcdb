@@ -166,12 +166,19 @@ func main() {
 	}
 	defer database.Close()
 
+	fmt.Print("Database Before Insertion: ")
+	database.Print()
+
+	fmt.Println("Database Insertion Started")
 	database.Put("harsh", "chauhan")
 	database.Put("c", "3")
 	database.Put("a", "1")
 	database.Put("hash", "#")
 	database.Put("b", "2")
+	database.Put("d", "4")
+	fmt.Println("Database Insertion Done!")
 
+	fmt.Println("Database Retrieval Started")
 	if val, ok := database.Get("harsh"); ok {
 		fmt.Println("harsh =>", string(val))
 	}
@@ -181,19 +188,12 @@ func main() {
 	if val, ok := database.Get("a"); ok {
 		fmt.Println("a =>", string(val))
 	}
+	fmt.Println("Database Retrieval Done!")
 
-	database.Delete("Hash")
-	if _, ok := database.Get("Hash"); !ok {
-		fmt.Println("Hash => deleted correctly")
+	fmt.Println("Database Deletion Started")
+	database.Delete("hash")
+	if _, ok := database.Get("hash"); !ok {
+		fmt.Println("hash => deleted correctly")
 	}
-
-	fmt.Println("\n--- sorted keys ---")
-	database.Ascend(func(key, value []byte, itemType uint8) bool {
-		if itemType == 1 {
-			fmt.Printf("%s => [tombstone]\n", key)
-		} else {
-			fmt.Printf("%s => %s\n", key, value)
-		}
-		return true
-	})
+	fmt.Println("Database Deletion Done!")
 }
