@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+
+	"github.com/hchauhan7816/hcdb/config"
 )
 
 type countingReader struct {
@@ -49,7 +51,7 @@ func (walObj *WAL) Replay() ([]Entry, error) {
 		}
 
 		// Validate Total Length
-		if totalLength > (1 + 4 + MAX_KEY_LENGTH + 4 + MAX_VALUE_LENGTH + 4) {
+		if totalLength > (1 + 4 + config.MAX_KEY_LENGTH + 4 + config.MAX_VALUE_LENGTH + 4) {
 			fmt.Println("Total length is greater than expected:", totalLength)
 			walObj.File.Truncate(startOffset)
 			break
@@ -109,7 +111,7 @@ func (walObj *WAL) Replay() ([]Entry, error) {
 			break
 		}
 
-		if keyLength > MAX_KEY_LENGTH || valueLength > MAX_VALUE_LENGTH {
+		if keyLength > config.MAX_KEY_LENGTH || valueLength > config.MAX_VALUE_LENGTH {
 			fmt.Println("Key length or value length is greater than expected:", keyLength, valueLength)
 			walObj.File.Truncate(startOffset)
 			break

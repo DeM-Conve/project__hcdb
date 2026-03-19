@@ -6,8 +6,6 @@ import (
 	"github.com/google/btree"
 )
 
-const DEGREE = 32
-
 type Item struct {
 	Type  uint8
 	Key   []byte

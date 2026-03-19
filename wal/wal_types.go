@@ -5,12 +5,7 @@ import (
 	"os"
 )
 
-const (
-	OP_PUT           = uint8(0)
-	OP_DELETE        = uint8(1)
-	MAX_KEY_LENGTH   = 1024
-	MAX_VALUE_LENGTH = 1048576
-)
+// Format: [totalLen][type(1)][keyLen(4)][valLen(4)][key][value][crc32(4)]
 
 type WAL struct {
 	File      *os.File

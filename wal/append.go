@@ -6,8 +6,6 @@ import (
 	"hash/crc32"
 )
 
-// Format: [totalLen][type(1)][keyLen(4)][valLen(4)][key][value][crc32(4)]
-
 func (walObj *WAL) Append(entry Entry) error {
 
 	dataBytes, err := writeDataBuff(entry)

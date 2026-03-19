@@ -3,6 +3,7 @@ package db
 import (
 	"fmt"
 
+	"github.com/hchauhan7816/hcdb/config"
 	"github.com/hchauhan7816/hcdb/memtable"
 	"github.com/hchauhan7816/hcdb/wal"
 )
@@ -22,9 +23,9 @@ func Open(filePath string) (*DB, error) {
 
 	for _, e := range entries {
 		switch e.Type {
-		case wal.OP_DELETE:
+		case config.OP_DELETE:
 			mem.Delete(e.Key)
-		case wal.OP_PUT:
+		case config.OP_PUT:
 			mem.Put(e.Key, e.Value)
 		}
 	}
@@ -64,7 +65,7 @@ func (db *DB) Print() {
 	fmt.Println("\n--- sorted keys ---")
 
 	db.memtable.Ascend(func(key, value []byte, itemType uint8) bool {
-		if itemType == wal.OP_DELETE {
+		if itemType == config.OP_DELETE {
 			fmt.Printf("%s => [tombstone]\n", key)
 		} else {
 			fmt.Printf("%s => %s\n", key, value)

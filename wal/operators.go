@@ -1,6 +1,6 @@
 package wal
 
-const syncThreshold = 10
+import "github.com/hchauhan7816/hcdb/config"
 
 var putCounter int
 
@@ -9,14 +9,14 @@ func (walObj *WAL) Put(key string, value string) error {
 	var keyByte = []byte(key)
 	var valueByte = []byte(value)
 
-	var entry Entry = Entry{Key: keyByte, Value: valueByte, Type: OP_PUT}
+	var entry Entry = Entry{Key: keyByte, Value: valueByte, Type: config.OP_PUT}
 
 	if err := walObj.Append(entry); err != nil {
 		return err
 	}
 
 	putCounter++
-	if putCounter >= syncThreshold {
+	if putCounter >= config.DEFAULT_SYNC_THRESHOLD {
 		if err := walObj.Sync(); err != nil {
 			return err
 		}
@@ -31,14 +31,14 @@ func (walObj *WAL) Delete(key string) error {
 	var keyByte = []byte(key)
 	var valueByte = []byte{}
 
-	var entry Entry = Entry{Key: keyByte, Value: valueByte, Type: OP_DELETE}
+	var entry Entry = Entry{Key: keyByte, Value: valueByte, Type: config.OP_DELETE}
 
 	if err := walObj.Append(entry); err != nil {
 		return err
 	}
 
 	putCounter++
-	if putCounter >= syncThreshold {
+	if putCounter >= config.DEFAULT_SYNC_THRESHOLD {
 		if err := walObj.Sync(); err != nil {
 			return err
 		}

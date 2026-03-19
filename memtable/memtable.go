@@ -2,7 +2,7 @@ package memtable
 
 import (
 	"github.com/google/btree"
-	"github.com/hchauhan7816/hcdb/wal"
+	"github.com/hchauhan7816/hcdb/config"
 )
 
 func (a Item) Less(b btree.Item) bool {
@@ -11,7 +11,7 @@ func (a Item) Less(b btree.Item) bool {
 
 func NewMemTable() *MemTable {
 	return &MemTable{
-		tree: btree.New(DEGREE),
+		tree: btree.New(config.DEFAULT_BTREE_DEGREE),
 	}
 }
 
@@ -41,7 +41,7 @@ func (memTable *MemTable) Get(key []byte) ([]byte, bool) {
 	}
 
 	item := result.(Item)
-	if item.Type == wal.OP_DELETE {
+	if item.Type == config.OP_DELETE {
 		return nil, false // tombstone
 	}
 
