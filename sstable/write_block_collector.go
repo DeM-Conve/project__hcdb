@@ -1,0 +1,37 @@
+package sstable
+
+type blockCollector struct {
+	entries      []BlockEntry
+	sizeEstimate int
+	lastFirstKey []byte
+}
+
+func newBlockCollector() *blockCollector {
+	return &blockCollector{}
+}
+
+func (bc *blockCollector) add(e BlockEntry) {
+
+	if len(bc.entries) == 0 {
+		bc.lastFirstKey = e.Key
+	}
+
+	bc.entries = append(bc.entries, e)
+	bc.sizeEstimate += len(e.Key) + len(e.Value) + 9 // type(1)+keyLen(4)+valLen(4)
+}
+
+func (bc *blockCollector) size() int {
+	return bc.sizeEstimate
+}
+
+func (bc *blockCollector) len() int {
+	return len(bc.entries)
+}
+
+func (bc *blockCollector) drain() []BlockEntry {
+	entries := bc.entries
+	bc.entries = nil
+	bc.sizeEstimate = 0
+	bc.lastFirstKey = nil
+	return entries
+}
