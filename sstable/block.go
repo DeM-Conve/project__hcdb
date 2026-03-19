@@ -3,6 +3,7 @@ package sstable
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"hash/crc32"
 	"io"
 )
@@ -90,6 +91,37 @@ func writeBlockEntry(buf *bytes.Buffer, e BlockEntry) error {
 		return err
 	}
 	return nil
+}
+
+func decodeBlock(blockBytes []byte) ([]BlockEntry, error) {
+	if len(blockBytes) < 4 {
+		return nil, fmt.Errorf("block too small")
+	}
+
+	data := blockBytes[:len(blockBytes)-4]
+	storedCRC := binary.LittleEndian.Uint32(blockBytes[len(blockBytes)-4:])
+
+	if crc32.ChecksumIEEE(data) != storedCRC {
+		return nil, fmt.Errorf("block CRC mismatch")
+	}
+
+	reader := bytes.NewReader(data)
+
+	var numEntries uint32
+	if err := binary.Read(reader, binary.LittleEndian, &numEntries); err != nil {
+		return nil, err
+	}
+
+	entries := make([]BlockEntry, 0, numEntries)
+	for i := uint32(0); i < numEntries; i++ {
+		e, err := readBlockEntry(reader)
+		if err != nil {
+			return nil, err
+		}
+		entries = append(entries, e)
+	}
+
+	return entries, nil
 }
 
 func readBlockEntry(r io.Reader) (BlockEntry, error) {

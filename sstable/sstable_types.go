@@ -11,3 +11,8 @@ type IndexEntry struct {
 	Offset   int64
 	Length   int32
 }
+
+type SSTable struct {
+	FilePath string
+	index    []IndexEntry
+}

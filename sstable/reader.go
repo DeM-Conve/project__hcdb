@@ -1,5 +1,9 @@
 package sstable
 
+import (
+	"os"
+)
+
 // ============================================================
 // SSTable Read Flow:
 //
@@ -40,3 +44,44 @@ package sstable
 // Result:
 //   returns index of "d" → block 2
 //
+
+func Open(filepath string) (*SSTable, error) {
+	file, err := os.Open(filepath)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	indexOffset, numEntries, err := readFooter(file)
+	if err != nil {
+		return nil, err
+	}
+
+	index, err := decodeIndex(file, indexOffset, numEntries)
+	if err != nil {
+		return nil, err
+	}
+
+	return &SSTable{FilePath: filepath, index: index}, nil
+}
+
+func OpenAllInDir(dirPath string) ([]*SSTable, error) {
+	dirEntries, err := os.ReadDir(dirPath)
+	if err != nil {
+		return nil, err
+	}
+
+	var tables []*SSTable
+	for i := len(dirEntries) - 1; i >= 0; i-- {
+		e := dirEntries[i]
+		if e.IsDir() {
+			continue
+		}
+		sst, err := Open(dirPath + "/" + e.Name())
+		if err != nil {
+			return nil, err
+		}
+		tables = append(tables, sst)
+	}
+	return tables, nil
+}

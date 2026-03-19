@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 
+	"github.com/hchauhan7816/hcdb/config"
 	"github.com/hchauhan7816/hcdb/db"
 )
 
@@ -156,44 +157,46 @@ import (
 // }
 
 func main() {
-	// write("assets/main.wal")
-	// replay("assets/main.wal")
-
-	database, err := db.Open("assets/main.wal")
+	database, err := db.Open(config.Config{WALPath: "assets/main.wal", SSTDir: "assets/sstables"})
 	if err != nil {
-		fmt.Println("Error opening DB:", err)
+		fmt.Println("Error:", err)
 		return
 	}
 	defer database.Close()
 
-	fmt.Print("Database Before Insertion: ")
-	database.Print()
-
-	fmt.Println("Database Insertion Started")
 	database.Put("harsh", "chauhan")
-	database.Put("c", "3")
 	database.Put("a", "1")
-	database.Put("hash", "#")
 	database.Put("b", "2")
-	database.Put("d", "4")
-	fmt.Println("Database Insertion Done!")
+	database.Put("c", "3")
+	database.Put("harsh", "engineer")
+	database.Put("vsauce", "michael")
+	database.Put("a", "4")
 
-	fmt.Println("Database Retrieval Started")
-	if val, ok := database.Get("harsh"); ok {
-		fmt.Println("harsh =>", string(val))
-	}
-	if val, ok := database.Get("hash"); ok {
-		fmt.Println("hash =>", string(val))
-	}
-	if val, ok := database.Get("a"); ok {
-		fmt.Println("a =>", string(val))
-	}
-	fmt.Println("Database Retrieval Done!")
+	fmt.Println("--- before flush ---")
+	printGet(database, "Harsh")
+	printGet(database, "a")
+	printGet(database, "b")
 
-	fmt.Println("Database Deletion Started")
-	database.Delete("hash")
-	if _, ok := database.Get("hash"); !ok {
-		fmt.Println("hash => deleted correctly")
+	database.Delete("b")
+	printGet(database, "b")
+
+	if err := database.ForceFlush(); err != nil {
+		fmt.Println("flush error:", err)
+		return
 	}
-	fmt.Println("Database Deletion Done!")
+	fmt.Println("--- after flush, reads from SSTable ---")
+	database.PrintMemTable()
+	printGet(database, "Harsh")
+	printGet(database, "a")
+	printGet(database, "b")
+	printGet(database, "c")
+	printGet(database, "vsauce")
+}
+
+func printGet(database *db.DB, key string) {
+	if val, ok := database.Get(key); ok {
+		fmt.Printf("%s => %s\n", key, val)
+	} else {
+		fmt.Printf("%s => not found\n", key)
+	}
 }

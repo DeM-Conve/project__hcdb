@@ -76,6 +76,26 @@ func encodeIndex(w io.Writer, entries []IndexEntry) error {
 	return nil
 }
 
+func decodeIndex(r io.ReadSeeker, indexOffset int64, numEntries uint32) ([]IndexEntry, error) {
+
+	if _, err := r.Seek(indexOffset, io.SeekStart); err != nil {
+		return nil, err
+	}
+
+	index := make([]IndexEntry, 0, numEntries)
+
+	for i := uint32(0); i < numEntries; i++ {
+		entry, err := readIndexEntry(r)
+		if err != nil {
+			return nil, err
+		}
+
+		index = append(index, entry)
+	}
+
+	return index, nil
+}
+
 func readIndexEntry(r io.Reader) (IndexEntry, error) {
 	var keyLen uint32
 	if err := binary.Read(r, binary.LittleEndian, &keyLen); err != nil {
