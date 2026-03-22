@@ -56,11 +56,16 @@ func rebuildMemtable(walObj *wal.WAL) (*memtable.MemTable, error) {
 
 func (db *DB) searchSSTables(key []byte) ([]byte, bool) {
 	for _, sst := range db.sstables {
-		val, ok, err := sst.Get(key)
-		if err != nil || !ok {
-			continue
+		val, st, err := sst.Lookup(key)
+		if err != nil {
+			return nil, false
 		}
-		return val, true
+		if st == sstable.KEY_DELETED {
+			return nil, false
+		}
+		if st == sstable.KEY_FOUND {
+			return val, true
+		}
 	}
 	return nil, false
 }
