@@ -8,19 +8,30 @@ import (
 	"github.com/hchauhan7816/hcdb/config"
 )
 
-func (sst *SSTable) Get(key []byte) ([]byte, bool, error) {
-
+// Lookup returns the value if present, KEY_DELETED if a tombstone wins in this table, or KEY_ABSENT.
+func (sst *SSTable) Lookup(key []byte) ([]byte, KEY_LOOKUP_ENUM, error) {
 	blockIdx := searchIndex(sst.index, key)
 	if blockIdx < 0 {
-		return nil, false, nil
+		return nil, KEY_ABSENT, nil
 	}
 
 	entries, err := sst.readBlock(sst.index[blockIdx])
 	if err != nil {
-		return nil, false, err
+		return nil, KEY_ABSENT, err
 	}
 
-	return findInBlock(entries, key)
+	return findInBlockLookup(entries, key)
+}
+
+func (sst *SSTable) Get(key []byte) ([]byte, bool, error) {
+	val, st, err := sst.Lookup(key)
+	if err != nil {
+		return nil, false, err
+	}
+	if st != KEY_FOUND {
+		return nil, false, nil
+	}
+	return val, true, nil
 }
 
 func (sst *SSTable) readBlock(idx IndexEntry) ([]BlockEntry, error) {
@@ -42,14 +53,14 @@ func (sst *SSTable) readBlock(idx IndexEntry) ([]BlockEntry, error) {
 	return decodeBlock(blockBytes)
 }
 
-func findInBlock(entries []BlockEntry, key []byte) ([]byte, bool, error) {
+func findInBlockLookup(entries []BlockEntry, key []byte) ([]byte, KEY_LOOKUP_ENUM, error) {
 	for _, e := range entries {
 		if bytes.Equal(e.Key, key) {
 			if e.Type == config.OP_DELETE {
-				return nil, false, nil // tombstone
+				return nil, KEY_DELETED, nil
 			}
-			return e.Value, true, nil
+			return e.Value, KEY_FOUND, nil
 		}
 	}
-	return nil, false, nil
+	return nil, KEY_ABSENT, nil
 }

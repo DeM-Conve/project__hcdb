@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/hchauhan7816/hcdb/compaction"
 	"github.com/hchauhan7816/hcdb/config"
 	"github.com/hchauhan7816/hcdb/memtable"
 	"github.com/hchauhan7816/hcdb/sstable"
@@ -55,11 +56,16 @@ func rebuildMemtable(walObj *wal.WAL) (*memtable.MemTable, error) {
 
 func (db *DB) searchSSTables(key []byte) ([]byte, bool) {
 	for _, sst := range db.sstables {
-		val, ok, err := sst.Get(key)
-		if err != nil || !ok {
-			continue
+		val, st, err := sst.Lookup(key)
+		if err != nil {
+			return nil, false
 		}
-		return val, true
+		if st == sstable.KEY_DELETED {
+			return nil, false
+		}
+		if st == sstable.KEY_FOUND {
+			return val, true
+		}
 	}
 	return nil, false
 }
@@ -77,7 +83,17 @@ func (db *DB) flushMemtable() error {
 	db.sstables = append([]*sstable.SSTable{sst}, db.sstables...)
 	db.memtable = memtable.NewMemTable()
 
-	return db.resetWAL()
+	if err := db.resetWAL(); err != nil {
+		return err
+	}
+
+	compacted, err := compaction.Compact(db.sstables, db.conf.SSTDir)
+	if err != nil {
+		return err
+	}
+	db.sstables = compacted
+
+	return nil
 }
 
 func (db *DB) resetWAL() error {

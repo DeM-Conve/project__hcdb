@@ -11,6 +11,9 @@ const (
 	DEFAULT_MEMTABLE_FLUSH_SIZE = 4 * 1024 * 1024 // 4MB
 	DEFAULT_BLOCK_SIZE          = 4096            // 4KB
 	DEFAULT_SYNC_THRESHOLD      = 10
+
+	DEFAULT_COMPACTION_THRESHOLD = 4 // trigger compaction when this many SSTables exist
+	DEFAULT_SIMILAR_SIZE_RATIO   = 2 // two tables are "similar size" if larger/smaller <= this
 )
 
 type Config struct {
