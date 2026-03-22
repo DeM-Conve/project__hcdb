@@ -167,30 +167,32 @@ func main() {
 	database.Put("harsh", "chauhan")
 	database.Put("a", "1")
 	database.Put("b", "2")
-	database.Put("c", "3")
+	database.ForceFlush()
+	fmt.Println("flush 1 done")
+
 	database.Put("harsh", "engineer")
-	database.Put("vsauce", "michael")
-	database.Put("a", "4")
+	database.Put("c", "3")
+	database.Put("d", "4")
+	database.ForceFlush()
+	fmt.Println("flush 2 done")
 
-	fmt.Println("--- before flush ---")
-	printGet(database, "Harsh")
-	printGet(database, "a")
-	printGet(database, "b")
+	database.Put("e", "5")
+	database.Put("f", "6")
+	database.Delete("b") // delete from earlier batch
+	database.ForceFlush()
+	fmt.Println("flush 3 done")
 
-	database.Delete("b")
-	printGet(database, "b")
+	database.Put("g", "7")
+	database.Put("h", "8")
+	database.ForceFlush()
+	fmt.Println("flush 4 done — compaction triggered")
 
-	if err := database.ForceFlush(); err != nil {
-		fmt.Println("flush error:", err)
-		return
-	}
-	fmt.Println("--- after flush, reads from SSTable ---")
-	database.PrintMemTable()
-	printGet(database, "Harsh")
-	printGet(database, "a")
-	printGet(database, "b")
-	printGet(database, "c")
-	printGet(database, "vsauce")
+	fmt.Println("\n--- reads after compaction ---")
+	printGet(database, "harsh") // Engineer — latest wins
+	printGet(database, "a")     // 1
+	printGet(database, "b")     // not found — deleted
+	printGet(database, "c")     // 3
+	printGet(database, "g")     // 7
 }
 
 func printGet(database *db.DB, key string) {

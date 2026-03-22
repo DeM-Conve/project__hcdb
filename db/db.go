@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/hchauhan7816/hcdb/compaction"
 	"github.com/hchauhan7816/hcdb/config"
 	"github.com/hchauhan7816/hcdb/memtable"
 	"github.com/hchauhan7816/hcdb/sstable"
@@ -77,7 +78,17 @@ func (db *DB) flushMemtable() error {
 	db.sstables = append([]*sstable.SSTable{sst}, db.sstables...)
 	db.memtable = memtable.NewMemTable()
 
-	return db.resetWAL()
+	if err := db.resetWAL(); err != nil {
+		return err
+	}
+
+	compacted, err := compaction.Compact(db.sstables, db.conf.SSTDir)
+	if err != nil {
+		return err
+	}
+	db.sstables = compacted
+
+	return nil
 }
 
 func (db *DB) resetWAL() error {
