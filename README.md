@@ -1,11 +1,10 @@
 # hcdb — A Persistent Key-Value Store in Go
 
-A storage engine built from scratch to understand how real databases work internally.
-Implements the core ideas behind LevelDB and RocksDB: WAL, memtable, SSTables,
-block-based layout, and size-tiered compaction.
-
-**This is a learning project, not production software.**
-The goal was depth of understanding, not feature completeness.
+**hcdb** is an in-progress LSM-style embedded key-value engine in Go: WAL,
+memtable, SSTables with a block-based layout, and size-tiered compaction—the
+same architectural pillars as LevelDB and RocksDB. It is under active
+development; the sections below document how it works today and what is still
+on the roadmap toward production-grade behavior.
 
 ---
 
@@ -147,6 +146,15 @@ tracking which files have been fully merged, dropping a tombstone early causes
 deleted keys to resurrect from older SSTables on the next read. This engine
 preserves tombstones through compaction as the safe default.
 
+### Why WAL sync is batched (every N operations)
+
+The WAL syncs to disk every N operations (N=10 by default). Between syncs, up
+to N-1 acknowledged writes can be lost on a hard power failure. That is a
+deliberate **durability vs throughput** trade-off—similar in spirit to MySQL’s
+`innodb_flush_log_at_trx_commit=2`: you accept a bounded loss window for much
+higher sustained write rates. Sync-on-every-write would make `Put` fully durable
+on every ack but is roughly an order of magnitude slower in typical setups.
+
 ---
 
 ## Benchmarks
@@ -201,107 +209,80 @@ in memory as long as possible.
 **On GetSSTableHit (798 allocs/op):**
 Block decoding allocates a `[]byte` per key and per value for every entry read.
 At 798 allocations per lookup, GC pressure will dominate under high read throughput.
-A production engine would use a block cache with pre-allocated byte buffers and
-arena allocation to eliminate most of these. This is a known limitation of the
-current implementation.
+A mature implementation would use a block cache with pre-allocated byte buffers
+and arena allocation to eliminate most of these; hcdb does not yet.
 
 ---
 
 ## Known Limitations
 
-These are understood design gaps, not surprises. Each points to a concrete
-next implementation step.
+These are **implementation gaps** in the current codebase—missing features or
+scaling bounds—not policy trade-offs already described under *Design Decisions
+and Why* (for example batched WAL sync). Each item points to a concrete next step.
 
-**1. No Bloom Filters**
-Negative lookups scan all SSTables. The scaled miss benchmark shows the cost
-clearly. Next step: per-SSTable Bloom filter persisted in the SSTable file,
-loaded into memory on open. False positive rate ~1% eliminates ~99% of disk
-reads on misses.
+**1. No Bloom filters**
+Negative lookups scan every SSTable. The scaled miss benchmark shows the cost.
+Next step: per-SSTable Bloom filter in the SSTable file, loaded on open; a low
+false-positive rate rejects most disk work on misses.
 
-**2. No Manifest File**
-SSTable state is reconstructed from the filesystem on open. A crash mid-compaction
-could leave orphaned `.sst` files with no record of which are valid. Production
-engines (LevelDB, RocksDB) use a MANIFEST file to record atomic version
-transitions — compaction is a logged operation, not just a file rename.
+**2. In-memory compaction**
+Compaction loads all entries from the SSTables in a group into memory before
+merging. A streaming k-way merge with a min-heap gives O(k log k) work and
+bounded RAM regardless of SSTable size—required before very large tables are safe.
 
-**3. In-Memory Compaction**
-Current compaction loads all entries from all SSTables into memory before merging.
-Correct approach: streaming k-way merge using a min-heap — O(k log k) time,
-bounded memory regardless of SSTable size. Required before this engine can handle
-SSTables larger than available RAM.
+**3. Single-threaded compaction**
+Compaction runs synchronously inside `flushMemtable`. Under heavy writes this
+inflates tail latency. Background compaction with throttling when debt builds is
+the usual next step.
 
-**4. No Leveled Compaction**
-Size-tiered compaction gives no hard bound on read amplification. Leveled
-compaction organises SSTables into levels with size ratios, bounding read
-amplification to O(number of levels) regardless of write volume.
-
-**5. WAL Sync Policy**
-WAL syncs every N operations (N=10 by default). Between syncs, up to N-1
-acknowledged writes can be lost on power failure. This is an explicit
-durability trade-off — identical to MySQL's `innodb_flush_log_at_trx_commit=2`.
-Sync-on-every-write would make Put fully durable but ~10x slower.
-
-**6. Single-Threaded Compaction**
-Compaction runs synchronously inside `flushMemtable`. Under heavy write load
-this introduces p99 latency spikes proportional to compaction time. Production
-engines run compaction on a background goroutine with write throttling when
-compaction debt accumulates.
-
-**7. High Allocation Count on Block Decode**
-798 allocs/op on SSTableHit. Each block decode allocates fresh byte slices per
-entry. A buffer pool or arena allocator would reduce this significantly.
+**4. High allocation count on block decode**
+~798 allocs/op on SSTable hits in benchmarks: each decode allocates fresh slices
+per entry. A buffer pool or arena would cut GC pressure sharply.
 
 ---
 
-## What I Learned Building This
+## Key ideas this engine illustrates
 
-**WAL ordering is not optional.**
-WAL must be written before the memtable update, not after. If the process crashes
-between a memtable write and its WAL entry, the write is silently lost with no
-recovery path. The order is load-bearing.
+**WAL before memtable — ordering is load-bearing.**  
+The WAL entry must be persisted before the in-memory update. A crash between
+memtable write and WAL record loses the write with no recovery path.
 
-**Tombstone semantics are subtle.**
-A tombstone cannot be dropped during compaction unless all older SSTables that
-could contain the key have also been compacted into the same output. Drop it too
-early and the deleted key resurrects from an older file on the next read. Getting
-this wrong produces a database that silently un-deletes data.
+**Tombstones and compaction — correctness is easy to get wrong.**  
+A tombstone is unsafe to drop until no older SSTable can still hold the key;
+otherwise a deleted key can reappear on read. Wrong merge rules silently
+“un-delete” data.
 
-**Read amplification compounds quickly.**
-With 10 SSTables and no Bloom filter, every miss touches 10 files. With 100,
-it touches 100. Compaction is not a maintenance task — it is the mechanism that
-keeps read amplification from becoming the dominant cost.
+**Read amplification grows with SSTable count.**  
+With no Bloom filter, every miss probes every SSTable. Compaction is the
+mechanism that keeps that cost from dominating; it is not optional housekeeping.
 
-**Block size is a genuine trade-off.**
-Smaller blocks mean more index entries and more memory for the index, but better
-I/O granularity — you read exactly what you need. Larger blocks mean fewer index
-entries but wasteful reads when only one key is needed from the block. 4KB aligns
-with the OS page size — reading one block is one page fault. Not accidental.
+**Block size balances index size vs read granularity.**  
+Smaller blocks improve I/O precision; larger blocks shrink the index but may
+pull in unused data. ~4KB lines up with typical OS pages so one block read maps
+cleanly to a page fault.
 
-**CRC corruption must be handled at startup.**
-A corrupted WAL tail from an incomplete write on crash should truncate cleanly,
-not prevent the DB from opening. Treating a partial write as fatal makes the
-engine unrecoverable from the most common failure mode. The WAL replay path
-truncates at the first corrupt entry and continues with the valid prefix.
+**Treat a corrupt WAL tail as truncatable, not fatal.**  
+Incomplete writes on crash should be discarded from the tail so the database
+still opens with a consistent prefix. Replay stops at the first bad entry.
 
-**Compaction correctness depends on SSTable ordering.**
-The merge logic assumes the newest SSTable wins on duplicate keys. That invariant
-must be enforced by whoever constructs the SSTable list — if filesystem iteration
-order is used without explicit sorting by timestamp, the invariant can silently
-break and older values overwrite newer ones.
+**Merge correctness needs explicit newest-wins ordering.**  
+Compaction assumes the newest SSTable wins on duplicate keys. Building the file
+list from arbitrary directory order without a stable “newest first” rule can let
+older values overwrite newer ones.
 
 ---
 
 ## What's Next
 
-In priority order, what a production version of this engine would require:
+Rough priority order for hardening and extending hcdb:
 
-1. Bloom filters per SSTable — fix read miss performance, O(1) negative lookups
-2. Manifest file — atomic compaction, safe crash recovery
-3. Streaming k-way merge — bounded memory compaction for large SSTables
-4. Leveled compaction — bound read amplification regardless of write volume
-5. Background compaction goroutine — eliminate p99 latency spikes on flush
-6. Block cache with buffer pool — eliminate 798 allocs/op on SSTable reads
-7. Snapshot reads / MVCC — foundation for transaction semantics
+1. **Bloom filters per SSTable** — cheap negative lookups, fewer disk touches on misses
+2. **Manifest / versioned metadata** — atomic compaction and clearer crash recovery
+3. **Streaming k-way merge** — bounded-memory compaction for large SSTables
+4. **Leveled (or hybrid) compaction** — stronger bounds on read amplification vs today’s size-tiered baseline
+5. **Background compaction** — decouple flush latency from merge work; throttle when debt grows
+6. **Block cache and buffer reuse** — cut allocation churn on hot read paths
+7. **Snapshots / MVCC** — basis for richer isolation and transactional semantics
 
 ---
 
@@ -309,13 +290,19 @@ In priority order, what a production version of this engine would require:
 
 ```
 hcdb/
-├── config/         — constants and DB config struct
-├── wal/            — write-ahead log: append, CRC32, replay, truncation
-├── memtable/       — in-memory sorted BTree with RWMutex
-├── sstable/        — on-disk format: blocks, sparse index, footer, lookup
-├── compaction/     — size-tiered merge: grouping, k-way merge, file cleanup
-├── db/             — public API: Get, Put, Delete, Open, Close, ForceFlush
-└── benchmark/      — Go benchmark suite with scaled miss analysis
+├── main.go              — small demo / entrypoint
+├── go.mod, go.sum       — Go module (github.com/hchauhan7816/hcdb)
+├── Dockerfile           — container image for the demo
+├── docker-compose.yml   — optional compose wiring
+├── README.md
+├── .gitignore
+├── config/              — defaults and DB config struct
+├── wal/                 — append-only log, CRC32, replay, truncation, sync policy
+├── memtable/            — in-memory sorted B-tree (google/btree), RWMutex
+├── sstable/             — blocks, sparse index, footer, read/write paths
+├── compaction/          — size-tiered grouping, merge, file lifecycle
+├── db/                  — Open/Close, Get, Put, Delete, ForceFlush
+└── benchmark/           — Go benchmarks including scaled miss analysis
 ```
 
 ---
