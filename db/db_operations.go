@@ -3,6 +3,9 @@ package db
 import "github.com/hchauhan7816/hcdb/config"
 
 func (db *DB) Get(key string) ([]byte, bool) {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
 	if val, ok := db.memtable.Get([]byte(key)); ok {
 		return val, true
 	}

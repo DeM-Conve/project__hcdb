@@ -2,8 +2,6 @@ package wal
 
 import "github.com/hchauhan7816/hcdb/config"
 
-var putCounter int
-
 func (walObj *WAL) Put(key string, value string) error {
 
 	var keyByte = []byte(key)
@@ -15,12 +13,12 @@ func (walObj *WAL) Put(key string, value string) error {
 		return err
 	}
 
-	putCounter++
-	if putCounter >= config.DEFAULT_SYNC_THRESHOLD {
+	walObj.putCounter++
+	if walObj.putCounter >= config.DEFAULT_SYNC_THRESHOLD {
 		if err := walObj.Sync(); err != nil {
 			return err
 		}
-		putCounter = 0
+		walObj.putCounter = 0
 	}
 
 	return nil
@@ -37,12 +35,12 @@ func (walObj *WAL) Delete(key string) error {
 		return err
 	}
 
-	putCounter++
-	if putCounter >= config.DEFAULT_SYNC_THRESHOLD {
+	walObj.putCounter++
+	if walObj.putCounter >= config.DEFAULT_SYNC_THRESHOLD {
 		if err := walObj.Sync(); err != nil {
 			return err
 		}
-		putCounter = 0
+		walObj.putCounter = 0
 	}
 
 	return nil

@@ -75,6 +75,9 @@ func (db *DB) ForceFlush() error {
 }
 
 func (db *DB) flushMemtable() error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
 	sst, err := sstable.Flush(db.memtable, db.conf.SSTDir)
 	if err != nil {
 		return err

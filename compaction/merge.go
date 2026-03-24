@@ -36,9 +36,11 @@ func mergeIterators(iterators []*sstable.BlockIterator) []sstable.BlockEntry {
 				continue
 			}
 			seen[key] = true
-			// skip tombstones — no point writing deleted keys to merged SSTable
-			// unless there are older SSTables that might still have the key
-			// for simplicity at this stage we keep tombstones
+			// Tombstones are preserved in compacted output intentionally.
+			// It is only safe to drop a tombstone when we are certain no older
+			// SSTable at any level can still contain the key. Without a manifest
+			// tracking which files have been fully merged, we cannot guarantee this.
+			// Premature tombstone removal = deleted keys resurrect from older SSTables.
 			result = append(result, entry)
 		}
 	}

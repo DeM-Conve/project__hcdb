@@ -82,8 +82,8 @@ func Flush(memTable *memtable.MemTable, dirPath string) (*SSTable, error) {
 
 	// flush remaining
 	if blockCollector.len() > 0 {
-		entries := blockCollector.drain()
 		lastFirstKey := blockCollector.lastFirstKey
+		entries := blockCollector.drain()
 
 		offset, err := flushBlock(writer, entries, currentOffset)
 		if err != nil {

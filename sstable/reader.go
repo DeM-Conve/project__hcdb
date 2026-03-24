@@ -2,6 +2,7 @@ package sstable
 
 import (
 	"os"
+	"sort"
 )
 
 // ============================================================
@@ -71,9 +72,13 @@ func OpenAllInDir(dirPath string) ([]*SSTable, error) {
 		return nil, err
 	}
 
+	// sort ascending by name (UnixNano), then reverse = newest first
+	sort.Slice(dirEntries, func(i, j int) bool {
+		return dirEntries[i].Name() > dirEntries[j].Name()
+	})
+
 	var tables []*SSTable
-	for i := len(dirEntries) - 1; i >= 0; i-- {
-		e := dirEntries[i]
+	for _, e := range dirEntries {
 		if e.IsDir() {
 			continue
 		}
