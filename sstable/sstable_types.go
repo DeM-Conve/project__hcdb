@@ -1,7 +1,9 @@
 package sstable
 
-// KEY_LOOKUP_ENUM distinguishes missing keys from explicit tombstones (required for LSM Get).
+import "github.com/hchauhan7816/hcdb/bloomfilter"
+
 type KEY_LOOKUP_ENUM uint8
+
 const (
 	KEY_ABSENT KEY_LOOKUP_ENUM = iota
 	KEY_FOUND
@@ -23,4 +25,5 @@ type IndexEntry struct {
 type SSTable struct {
 	FilePath string
 	index    []IndexEntry
+	bloom    *bloomfilter.BloomFilter // loaded from disk on Open
 }

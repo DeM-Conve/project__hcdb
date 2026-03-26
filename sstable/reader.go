@@ -1,28 +1,34 @@
 package sstable
 
 import (
+	"encoding/binary"
+	"io"
 	"os"
 	"sort"
+
+	"github.com/hchauhan7816/hcdb/bloomfilter"
 )
 
 // ============================================================
 // SSTable Read Flow:
 //
 // 1. Open file
-// 2. Read footer (last 12 bytes)
-//      → get indexOffset and numEntries
+// 2. Read footer (last 20 bytes)
+//      → get indexOffset, numEntries, and bloomOffset
 // 3. Load index into memory
-// 4. Binary search index to find correct block
-// 5. Read only that block from disk
-// 6. Scan block entries to find key
+// 4. Load Bloom filter from bloomOffset
+// 5. On lookup, check Bloom first
+// 6. If Bloom may contain key: binary search index, read block, scan block entries
 //
 // ------------------------------------------------------------
 // Lookup Flow:
 //
-//   key → searchIndex() → blockIdx
-//       → readBlock(offset, length)
-//       → decodeBlock()
-//       → findInBlock()
+//   key → bloom.MightContain()
+//       ├─ no  → KEY_ABSENT (skip disk block read)
+//       └─ yes → searchIndex() → blockIdx
+//                → readBlock(offset, length)
+//                → decodeBlock()
+//                → findInBlock()
 //
 // ------------------------------------------------------------
 // Key Insight:
@@ -53,7 +59,7 @@ func Open(filepath string) (*SSTable, error) {
 	}
 	defer file.Close()
 
-	indexOffset, numEntries, err := readFooter(file)
+	indexOffset, numEntries, bloomOffset, err := readFooterWithBloom(file)
 	if err != nil {
 		return nil, err
 	}
@@ -63,7 +69,30 @@ func Open(filepath string) (*SSTable, error) {
 		return nil, err
 	}
 
-	return &SSTable{FilePath: filepath, index: index}, nil
+	bloom, err := readBloom(file, bloomOffset)
+	if err != nil {
+		return nil, err
+	}
+
+	return &SSTable{FilePath: filepath, index: index, bloom: bloom}, nil
+}
+
+func readBloom(file *os.File, bloomOffset int64) (*bloomfilter.BloomFilter, error) {
+	if _, err := file.Seek(bloomOffset, io.SeekStart); err != nil {
+		return nil, err
+	}
+
+	var bloomLen uint32
+	if err := binary.Read(file, binary.LittleEndian, &bloomLen); err != nil {
+		return nil, err
+	}
+
+	bloomBytes := make([]byte, bloomLen)
+	if _, err := io.ReadFull(file, bloomBytes); err != nil {
+		return nil, err
+	}
+
+	return bloomfilter.Deserialize(bloomBytes), nil
 }
 
 func OpenAllInDir(dirPath string) ([]*SSTable, error) {

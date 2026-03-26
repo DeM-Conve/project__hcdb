@@ -8,8 +8,13 @@ import (
 	"github.com/hchauhan7816/hcdb/config"
 )
 
-// Lookup returns the value if present, KEY_DELETED if a tombstone wins in this table, or KEY_ABSENT.
+// Lookup — bloom filter check happens BEFORE any disk read
 func (sst *SSTable) Lookup(key []byte) ([]byte, KEY_LOOKUP_ENUM, error) {
+	// bloom says definitely not here — skip disk entirely
+	if !sst.bloom.MightContain(key) {
+		return nil, KEY_ABSENT, nil
+	}
+
 	blockIdx := searchIndex(sst.index, key)
 	if blockIdx < 0 {
 		return nil, KEY_ABSENT, nil

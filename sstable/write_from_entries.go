@@ -2,8 +2,10 @@ package sstable
 
 import (
 	"bufio"
+	"encoding/binary"
 	"os"
 
+	"github.com/hchauhan7816/hcdb/bloomfilter"
 	"github.com/hchauhan7816/hcdb/config"
 )
 
@@ -15,11 +17,17 @@ func WriteSSTableFromBlockEntries(filePath string, entries []BlockEntry) (*SSTab
 	defer file.Close()
 
 	writer := bufio.NewWriter(file)
+	bloom := bloomfilter.NewBloomFilter(config.DEFAULT_BLOOM_EXPECTED_KEYS)
 
 	var indexEntries []IndexEntry
 	var currentOffset int64
 
 	collector := newBlockCollector()
+
+	// add all keys to bloom
+	for _, e := range entries {
+		bloom.Add(e.Key)
+	}
 
 	flushCurrent := func() error {
 		if collector.len() == 0 {
@@ -62,7 +70,17 @@ func WriteSSTableFromBlockEntries(filePath string, entries []BlockEntry) (*SSTab
 	if err := encodeIndex(writer, indexEntries); err != nil {
 		return nil, err
 	}
-	if err := encodeFooter(writer, indexOffset, uint32(len(indexEntries))); err != nil {
+
+	bloomBytes := bloomfilter.Serialize(bloom)
+	bloomOffset := indexOffset + indexSize(indexEntries)
+	if err := binary.Write(writer, binary.LittleEndian, uint32(len(bloomBytes))); err != nil {
+		return nil, err
+	}
+	if _, err := writer.Write(bloomBytes); err != nil {
+		return nil, err
+	}
+
+	if err := encodeFooterWithBloom(writer, indexOffset, uint32(len(indexEntries)), bloomOffset); err != nil {
 		return nil, err
 	}
 	if err := writer.Flush(); err != nil {
@@ -72,5 +90,5 @@ func WriteSSTableFromBlockEntries(filePath string, entries []BlockEntry) (*SSTab
 		return nil, err
 	}
 
-	return &SSTable{FilePath: filePath, index: indexEntries}, nil
+	return &SSTable{FilePath: filePath, index: indexEntries, bloom: bloom}, nil
 }
