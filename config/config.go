@@ -14,6 +14,9 @@ const (
 
 	DEFAULT_COMPACTION_THRESHOLD = 4 // trigger compaction when this many SSTables exist
 	DEFAULT_SIMILAR_SIZE_RATIO   = 2 // two tables are "similar size" if larger/smaller <= this
+
+	DEFAULT_BLOOM_FALSE_POSITIVE_RATE = 0.01   // 1% false positive rate
+	DEFAULT_BLOOM_EXPECTED_KEYS       = 100000 // expected keys per SSTable
 )
 
 type Config struct {

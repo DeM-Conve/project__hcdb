@@ -41,6 +41,9 @@ Read Path
   SSTable scan (newest → oldest)
        │
        ▼
+  Bloom check → maybe absent? skip SSTable
+       │
+       ▼
   Binary search on index → read block → scan block entries
 ```
 
@@ -59,8 +62,12 @@ Read Path
 │  Index Section                      │
 │  (firstKey, offset, length) × N     │
 ├─────────────────────────────────────┤
-│  Footer (12 bytes)                  │
+│  Bloom Section                       │
+│  bloomLen (4B) | bloomBytes (N bytes)│
+├─────────────────────────────────────┤
+│  Footer (20 bytes)                  │
 │  indexOffset (8B) | numEntries (4B) │
+│  bloomOffset (8B)                   │
 └─────────────────────────────────────┘
 ```
 
@@ -220,10 +227,10 @@ These are **implementation gaps** in the current codebase—missing features or
 scaling bounds—not policy trade-offs already described under *Design Decisions
 and Why* (for example batched WAL sync). Each item points to a concrete next step.
 
-**1. No Bloom filters**
-Negative lookups scan every SSTable. The scaled miss benchmark shows the cost.
-Next step: per-SSTable Bloom filter in the SSTable file, loaded on open; a low
-false-positive rate rejects most disk work on misses.
+**1. No Bloom filter metrics/tuning yet**
+Bloom filters are now present per SSTable, but they are not yet configurable
+per workload (expected keys / false-positive rate) and are not benchmarked as a
+separate before-vs-after profile in this README.
 
 **2. In-memory compaction**
 Compaction loads all entries from the SSTables in a group into memory before
@@ -268,7 +275,8 @@ still opens with a consistent prefix. Replay stops at the first bad entry.
 **Merge correctness needs explicit newest-wins ordering.**  
 Compaction assumes the newest SSTable wins on duplicate keys. Building the file
 list from arbitrary directory order without a stable “newest first” rule can let
-older values overwrite newer ones.
+older values overwrite newer ones; this engine now enforces newest-first ordering
+when opening SSTables.
 
 ---
 
@@ -276,7 +284,7 @@ older values overwrite newer ones.
 
 Rough priority order for hardening and extending hcdb:
 
-1. **Bloom filters per SSTable** — cheap negative lookups, fewer disk touches on misses
+1. **Bloom filter tuning + measurement** — configurable false-positive targets and explicit miss-latency impact benchmarks
 2. **Manifest / versioned metadata** — atomic compaction and clearer crash recovery
 3. **Streaming k-way merge** — bounded-memory compaction for large SSTables
 4. **Leveled (or hybrid) compaction** — stronger bounds on read amplification vs today’s size-tiered baseline
@@ -300,6 +308,7 @@ hcdb/
 ├── wal/                 — append-only log, CRC32, replay, truncation, sync policy
 ├── memtable/            — in-memory sorted B-tree (google/btree), RWMutex
 ├── sstable/             — blocks, sparse index, footer, read/write paths
+├── bloomfilter/         — Bloom filter types, hashing, serialization, set ops
 ├── compaction/          — size-tiered grouping, merge, file lifecycle
 ├── db/                  — Open/Close, Get, Put, Delete, ForceFlush
 └── benchmark/           — Go benchmarks including scaled miss analysis

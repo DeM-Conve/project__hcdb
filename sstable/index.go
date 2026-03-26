@@ -16,6 +16,8 @@ import (
 //   | IndexEntry 2              |
 //   | ...                       |
 //   +---------------------------+
+//   | BloomLen + BloomBytes     |
+//   +---------------------------+
 //   | Footer                    |
 //   +---------------------------+
 //
@@ -45,16 +47,18 @@ import (
 //   [g -> block3]
 //
 // ------------------------------------------------------------
-// Footer Format (last 12 bytes of file):
+// Footer Format (last 20 bytes of file):
 //
 //   +-------------------+
 //   | indexOffset (8B)  |
 //   +-------------------+
 //   | numEntries (4B)   |
 //   +-------------------+
+//   | bloomOffset (8B)  |
+//   +-------------------+
 //
 // Purpose:
-// - Allows direct jump to index without scanning file
+// - Allows direct jump to index and bloom section without scanning file
 //
 // ============================================================
 
@@ -134,6 +138,30 @@ func readFooter(r io.ReadSeeker) (indexOffset int64, numEntries uint32, err erro
 		return
 	}
 	err = binary.Read(r, binary.LittleEndian, &numEntries)
+	return
+}
+
+func encodeFooterWithBloom(w io.Writer, indexOffset int64, numEntries uint32, bloomOffset int64) error {
+	if err := binary.Write(w, binary.LittleEndian, indexOffset); err != nil {
+		return err
+	}
+	if err := binary.Write(w, binary.LittleEndian, numEntries); err != nil {
+		return err
+	}
+	return binary.Write(w, binary.LittleEndian, bloomOffset)
+}
+
+func readFooterWithBloom(r io.ReadSeeker) (indexOffset int64, numEntries uint32, bloomOffset int64, err error) {
+	if _, err = r.Seek(-20, io.SeekEnd); err != nil {
+		return
+	}
+	if err = binary.Read(r, binary.LittleEndian, &indexOffset); err != nil {
+		return
+	}
+	if err = binary.Read(r, binary.LittleEndian, &numEntries); err != nil {
+		return
+	}
+	err = binary.Read(r, binary.LittleEndian, &bloomOffset)
 	return
 }
 

@@ -2,10 +2,12 @@ package sstable
 
 import (
 	"bufio"
+	"encoding/binary"
 	"fmt"
 	"os"
 	"time"
 
+	"github.com/hchauhan7816/hcdb/bloomfilter"
 	"github.com/hchauhan7816/hcdb/config"
 	"github.com/hchauhan7816/hcdb/memtable"
 )
@@ -26,11 +28,13 @@ import (
 //      ↓
 // Write index section
 //      ↓
-// Write footer (indexOffset + numEntries)
+// Write bloom bytes (BloomLen + BloomBytes)
+//      ↓
+// Write footer (indexOffset + numEntries + bloomOffset)
 //
 // Final File:
 //
-//   [ Block 1 ][ Block 2 ] ... [ Index ][ Footer ]
+//   [ Block 1 ][ Block 2 ] ... [ Index ][ BloomLen+BloomBytes ][ Footer ]
 //
 // ============================================================
 
@@ -45,6 +49,7 @@ func Flush(memTable *memtable.MemTable, dirPath string) (*SSTable, error) {
 	defer file.Close()
 
 	writer := bufio.NewWriter(file)
+	bloom := bloomfilter.NewBloomFilter(config.DEFAULT_BLOOM_EXPECTED_KEYS)
 
 	var blockCollector blockCollector
 	var indexEntries []IndexEntry
@@ -52,6 +57,7 @@ func Flush(memTable *memtable.MemTable, dirPath string) (*SSTable, error) {
 
 	var iterErr error
 	memTable.Ascend(func(key, value []byte, itemType uint8) bool {
+		bloom.Add(key)
 		blockCollector.add(BlockEntry{Key: key, Value: value, Type: itemType})
 
 		if blockCollector.size() >= config.DEFAULT_BLOCK_SIZE {
@@ -104,7 +110,19 @@ func Flush(memTable *memtable.MemTable, dirPath string) (*SSTable, error) {
 	if err := encodeIndex(writer, indexEntries); err != nil {
 		return nil, err
 	}
-	if err := encodeFooter(writer, indexOffset, uint32(len(indexEntries))); err != nil {
+
+	// write bloom filter after index
+	bloomBytes := bloomfilter.Serialize(bloom)
+	bloomOffset := indexOffset + indexSize(indexEntries)
+	if err := binary.Write(writer, binary.LittleEndian, uint32(len(bloomBytes))); err != nil {
+		return nil, err
+	}
+	if _, err := writer.Write(bloomBytes); err != nil {
+		return nil, err
+	}
+
+	// footer now includes bloomOffset
+	if err := encodeFooterWithBloom(writer, indexOffset, uint32(len(indexEntries)), bloomOffset); err != nil {
 		return nil, err
 	}
 	if err := writer.Flush(); err != nil {
@@ -114,7 +132,15 @@ func Flush(memTable *memtable.MemTable, dirPath string) (*SSTable, error) {
 		return nil, err
 	}
 
-	return &SSTable{FilePath: filePath, index: indexEntries}, nil
+	return &SSTable{FilePath: filePath, index: indexEntries, bloom: bloom}, nil
+}
+
+func indexSize(entries []IndexEntry) int64 {
+	var size int64
+	for _, e := range entries {
+		size += 4 + int64(len(e.FirstKey)) + 8 + 4
+	}
+	return size
 }
 
 func flushBlock(w *bufio.Writer, entries []BlockEntry, currentOffset int64) (nn int64, err error) {
