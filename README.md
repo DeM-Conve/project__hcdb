@@ -1,7 +1,7 @@
 # hcdb — A Persistent Key-Value Store in Go
 
 **hcdb** is an in-progress LSM-style embedded key-value engine in Go: WAL,
-memtable, SSTables with a block-based layout, and size-tiered compaction—the
+memtable, SSTables with a block-based layout, and size-tiered compaction - the
 same architectural pillars as LevelDB and RocksDB. It is under active
 development; the sections below document how it works today and what is still
 on the roadmap toward production-grade behavior.
@@ -19,7 +19,7 @@ Write Path
   WAL (append-only, CRC32 protected)          ← crash safety
        │
        ▼
-  Memtable (BTree, sorted, in-memory)         ← fast writes
+  Memtable (B-tree, sorted, in-memory)        ← fast writes
        │
        │  when size >= 4MB
        ▼
@@ -62,8 +62,8 @@ Read Path
 │  Index Section                      │
 │  (firstKey, offset, length) × N     │
 ├─────────────────────────────────────┤
-│  Bloom Section                       │
-│  bloomLen (4B) | bloomBytes (N bytes)│
+│  Bloom Section                      │
+│  bloomLen (4B) | bloomBytes (N bytes) │
 ├─────────────────────────────────────┤
 │  Footer (20 bytes)                  │
 │  indexOffset (8B) | numEntries (4B) │
@@ -171,44 +171,41 @@ Command: `go test ./benchmark/ -bench=. -benchtime=5s -benchmem`
 
 ### Core Operations
 
-| Benchmark                    | ops/sec    | ns/op  | allocs/op | Notes                               |
-| ---------------------------- | ---------- | ------ | --------- | ----------------------------------- |
-| PutSequential                | ~220,000   | 4,543  | 48        | WAL append + memtable insert        |
-| PutRandom                    | ~223,000   | 4,485  | 38        | Memtable absorbs random write order |
-| GetMemtableHit               | ~2,480,000 | 403    | 3         | No disk I/O — pure BTree lookup     |
-| GetSSTableHit                | ~38,800    | 25,763 | 798       | Index search + block read + decode  |
-| GetMiss (key absent)         | ~96,100    | 10,406 | 241       | Scans all SSTables — see note below |
-| Delete                       | ~757,500   | 1,320  | 12        | Tombstone write — smaller payload   |
-| Mixed (80% write / 20% read) | ~155,700   | 6,425  | 137       | Realistic workload approximation    |
-| CompactionThroughput         | ~87,700    | 11,394 | 121       | Flush + compaction every 500 ops    |
+| Benchmark                    | ops/sec    | ns/op   | allocs/op | Notes                               |
+| ---------------------------- | ---------- | ------- | --------- | ----------------------------------- |
+| PutSequential                | 2,291,530  | 5,177   | 49        | WAL append + memtable insert        |
+| PutRandom                    | 1,326,667  | 5,365   | 39        | Memtable absorbs random write order |
+| GetMemtableHit               | 16,069,924 | 362.6   | 3         | No disk I/O — pure BTree lookup     |
+| GetSSTableHit                | 247,140    | 23,825  | 798       | Index search + block read + decode  |
+| GetMiss (key absent)         | 27,245,608 | 210.8   | 4         | Bloom reject path for most misses   |
+| Delete                       | 4,751,407  | 1,377   | 12        | Tombstone write — smaller payload   |
+| Mixed (80% write / 20% read) | 1,249,740  | 6,195   | 136       | Realistic workload approximation    |
+| CompactionThroughput         | 930,319    | 20,187  | 175       | Flush + compaction every 500 ops    |
 
 ### Miss Latency vs SSTable Count
 
 This benchmark isolates how read-miss cost grows as SSTable count increases.
-It is the clearest argument for why Bloom filters matter in an LSM engine.
+It shows how stable miss latency remains with Bloom filters enabled.
 
-| SSTable Count | ns/op  | allocs/op | Observation                                           |
-| ------------- | ------ | --------- | ----------------------------------------------------- |
-| 1             | 16,755 | 516       | Baseline — one file to check                          |
-| 5             | 20,561 | 548       | Moderate growth — 5 files scanned                     |
-| 10            | 37,681 | 1,085     | ~2x cost of 5 SSTables                                |
-| 20            | 37,812 | 1,090     | Nearly identical to 10 — compaction merged files down |
+| SSTable Count | ns/op | allocs/op | Observation                                                    |
+| ------------- | ----- | --------- | -------------------------------------------------------------- |
+| 1             | 241.5 | 4         | Bloom rejects most misses before block I/O                     |
+| 5             | 272.5 | 4         | Small overhead from checking more in-memory Bloom filters      |
+| 10            | 232.7 | 4         | Similar miss latency; Bloom path keeps misses near-constant    |
+| 20            | 278.4 | 4         | Still bounded; no linear growth with table count in this range |
 
-**Why 10 and 20 SSTables show the same latency:**
-Size-tiered compaction fires when SSTable count reaches the threshold (4 by default).
-By the time the benchmark seeds 20 SSTables, compaction has already merged them down
-to approximately 10. This is compaction working correctly — it bounds SSTable count
-under sustained write load. The practical implication: miss latency is bounded by
-the post-compaction SSTable count, not the raw write volume.
+**Why miss latency stays flat from 1 to 20 SSTables:**
+With per-SSTable Bloom filters, most misses are rejected from in-memory bit tests
+before any block read. As SSTable count increases, miss cost remains close to
+constant in this benchmark (roughly 0.21-0.28 us), instead of rising with file count.
 
-**The Bloom filter argument:**
-Even bounded at ~10 SSTables, a miss costs ~37μs and touches ~1,085 allocations.
-A per-SSTable Bloom filter would reject ~99% of misses with a single probabilistic
-check and zero disk reads, making miss latency effectively O(1) regardless of
-SSTable count.
+**Bloom filter impact in the current implementation:**
+Misses now complete in ~211–278 ns with just 4 allocations/op across 1–20 SSTables.
+This reflects the intended Bloom fast path: reject negative lookups cheaply, avoid
+disk block reads on misses, and keep miss behavior effectively near O(1) in practice.
 
-**Memtable vs SSTable read gap: ~64x**
-GetMemtableHit at 403 ns vs GetSSTableHit at 25,763 ns. This gap represents the
+**Memtable vs SSTable read gap: ~66x**
+GetMemtableHit at 362.6 ns vs GetSSTableHit at 23,825 ns. This gap represents the
 combined cost of disk I/O, index binary search, block decode, and allocation
 overhead. It is the core reason LSM engines use a large memtable — keep hot data
 in memory as long as possible.
@@ -259,8 +256,8 @@ A tombstone is unsafe to drop until no older SSTable can still hold the key;
 otherwise a deleted key can reappear on read. Wrong merge rules silently
 “un-delete” data.
 
-**Read amplification grows with SSTable count.**  
-With no Bloom filter, every miss probes every SSTable. Compaction is the
+**Read amplification grows with SSTable count (without Bloom filters).**  
+Without Bloom filters, every miss probes every SSTable. Compaction is the
 mechanism that keeps that cost from dominating; it is not optional housekeeping.
 
 **Block size balances index size vs read granularity.**  
