@@ -1,6 +1,0 @@
-services:
-  hcdb:
-    build: .
-    volumes:
-      - ./assets:/app/assets
-    container_name: hcdb
