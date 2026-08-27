@@ -218,6 +218,32 @@ and arena allocation to eliminate most of these; hcdb does not yet.
 
 ---
 
+### Write Path Allocation Breakdown (`bench/` package investigation)
+
+Layered benchmarks isolating each stage of `db.Put` (`go test ./bench/ -bench=. -benchmem`):
+
+| Benchmark       | What it isolates                          | allocs/op |
+| --------------- | ------------------------------------------ | --------- |
+| WalAppend       | `wal.Append` — encode + buffered write      | 7         |
+| MemtablePut     | `memtable.Put` — BTree insert               | 5         |
+| PutSequential   | full `db.Put` path (WAL + memtable + flush) | 26        |
+
+WAL + memtable only account for 12 of the 26 allocations in the full path. The
+remaining ~14 were confirmed, by temporarily raising `DEFAULT_MEMTABLE_FLUSH_SIZE`
+so no flush could trigger during the run, to come from `db.flushMemtable()` firing
+synchronously mid-benchmark (`allocs/op` dropped to 13, matching `7 + 5` almost
+exactly once flushing was removed from the equation). `ns/op` also dropped by more
+than half (2087 -> 795), confirming flush is the dominant cost, not just an
+allocation source.
+
+This is not a bug — flushing a full memtable to an SSTable is necessary work.
+The real issue it exposes: `flushMemtable` runs **synchronously in the caller's
+goroutine**, so any `Put` that happens to cross the flush threshold pays the full
+cost of a flush before returning. This is the same class of problem as the mutex
+below — one write blocking on work that could happen in the background instead.
+
+---
+
 ## Known Limitations
 
 These are **implementation gaps** in the current codebase—missing features or
@@ -242,6 +268,20 @@ the usual next step.
 **4. High allocation count on block decode**
 ~798 allocs/op on SSTable hits in benchmarks: each decode allocates fresh slices
 per entry. A buffer pool or arena would cut GC pressure sharply.
+
+**5. Memtable writes serialize on a single mutex**
+`memtable.Put`/`Get`/`Delete` all take the same `sync.RWMutex` guarding the whole
+BTree. Every concurrent writer queues behind one lock regardless of core count —
+`BenchmarkMemtablePutParallel` (`bench/`) is designed to confirm this empirically
+via `b.RunParallel`, not yet run. Pebble avoids this with a lock-free skiplist
+(atomic CAS per node, arena-allocated) so concurrent writers make real progress
+instead of taking turns.
+
+**6. Synchronous flush blocks the writer**
+`flushMemtable` runs inline inside `Put` when the size threshold is crossed, so
+that call pays the full flush cost before returning (see Write Path Allocation
+Breakdown above). A production engine rotates in a fresh memtable immediately and
+flushes the full one on a background goroutine so writes never stall on it.
 
 ---
 
