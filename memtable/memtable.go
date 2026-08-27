@@ -15,7 +15,7 @@ func NewMemTable() *MemTable {
 	}
 }
 
-func (memTable *MemTable) Put(key, value []byte) {
+func (memTable *MemTable) Put(key []byte, value []byte) {
 	memTable.mut.Lock()
 	defer memTable.mut.Unlock()
 

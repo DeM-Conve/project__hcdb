@@ -14,11 +14,15 @@ func (db *DB) Get(key string) ([]byte, bool) {
 }
 
 func (db *DB) Put(key, value string) error {
-	if err := db.wal.Put(key, value); err != nil {
+
+	var keyByte []byte = []byte(key)
+	var valueByte []byte = []byte(value)
+
+	if err := db.wal.Put(keyByte, valueByte); err != nil {
 		return err
 	}
 
-	db.memtable.Put([]byte(key), []byte(value))
+	db.memtable.Put(keyByte, valueByte)
 
 	if db.memtable.Size() >= config.DEFAULT_MEMTABLE_FLUSH_SIZE {
 		return db.flushMemtable()

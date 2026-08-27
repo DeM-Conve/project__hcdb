@@ -2,10 +2,7 @@ package wal
 
 import "github.com/hchauhan7816/hcdb/config"
 
-func (walObj *WAL) Put(key string, value string) error {
-
-	var keyByte = []byte(key)
-	var valueByte = []byte(value)
+func (walObj *WAL) Put(keyByte []byte, valueByte []byte) error {
 
 	var entry Entry = Entry{Key: keyByte, Value: valueByte, Type: config.OP_PUT}
 
