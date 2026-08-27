@@ -271,11 +271,14 @@ per entry. A buffer pool or arena would cut GC pressure sharply.
 
 **5. Memtable writes serialize on a single mutex**
 `memtable.Put`/`Get`/`Delete` all take the same `sync.RWMutex` guarding the whole
-BTree. Every concurrent writer queues behind one lock regardless of core count —
-`BenchmarkMemtablePutParallel` (`bench/`) is designed to confirm this empirically
-via `b.RunParallel`, not yet run. Pebble avoids this with a lock-free skiplist
-(atomic CAS per node, arena-allocated) so concurrent writers make real progress
-instead of taking turns.
+BTree. Every concurrent writer queues behind one lock regardless of core count.
+Confirmed via `BenchmarkMemtablePutParallel` (`bench/`, `b.RunParallel` across 22
+goroutines): parallel writes are *slower* than sequential (674.5 ns/op vs 525.0
+ns/op for the same op), not just non-improving — contention overhead (goroutines
+blocking/waking on the lock) outweighs any benefit, since the actual tree insert
+still only ever happens one goroutine at a time regardless of core count. Pebble
+avoids this with a lock-free skiplist (atomic CAS per node, arena-allocated) so
+concurrent writers make real progress instead of taking turns.
 
 **6. Synchronous flush blocks the writer**
 `flushMemtable` runs inline inside `Put` when the size threshold is crossed, so
