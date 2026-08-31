@@ -30,7 +30,7 @@ func (bc *blockCollector) len() int {
 
 func (bc *blockCollector) drain() []BlockEntry {
 	entries := bc.entries
-	bc.entries = nil
+	bc.entries = bc.entries[:0]
 	bc.sizeEstimate = 0
 	bc.lastFirstKey = nil
 	return entries
