@@ -14,6 +14,7 @@ import (
 // ─── helpers ────────────────────────────────────────────────────────────────
 
 // TODO: hardcoded real-disk path so benchmarks run on real disk without any
+// env var setup. Revisit later — should be a flag or config, not a hardcode.
 const benchDiskRoot = "/home/harsh-chauhan/z_drive/PERSONAL/project__hcdb/.benchdata"
 
 func openDB(t testing.TB) (*db.DB, func()) {
@@ -66,6 +67,7 @@ func BenchmarkPutSequential(b *testing.B) {
 
 	b.ResetTimer()
 	b.ReportAllocs()
+	b.SetBytes(int64(len("key-00000000") + len("value-benchmark-payload-32bytes!!")))
 
 	for i := 0; i < b.N; i++ {
 		if err := database.Put(keys[i], "value-benchmark-payload-32bytes!!"); err != nil {
@@ -91,6 +93,7 @@ func BenchmarkPutRandom(b *testing.B) {
 
 	b.ResetTimer()
 	b.ReportAllocs()
+	b.SetBytes(int64(len("key-0000000000000000") + len("value-benchmark-payload-32bytes!!")))
 
 	for i := 0; i < b.N; i++ {
 		if err := database.Put(keys[i], "value-benchmark-payload-32bytes!!"); err != nil {
@@ -111,14 +114,19 @@ func BenchmarkGetMemtableHit(b *testing.B) {
 	const keyCount = 10_000
 	keys := sequentialKeys(keyCount)
 	for _, k := range keys {
-		database.Put(k, "value")
+		if err := database.Put(k, "value"); err != nil {
+			b.Fatalf("setup put: %v", err)
+		}
 	}
 
 	b.ResetTimer()
 	b.ReportAllocs()
+	b.SetBytes(int64(len("value")))
 
 	for i := 0; i < b.N; i++ {
-		database.Get(keys[i%keyCount])
+		if _, ok := database.Get(keys[i%keyCount]); !ok {
+			b.Fatalf("expected hit for %s, got miss", keys[i%keyCount])
+		}
 	}
 }
 
@@ -133,7 +141,9 @@ func BenchmarkGetSSTableHit(b *testing.B) {
 	const keyCount = 10_000
 	keys := sequentialKeys(keyCount)
 	for _, k := range keys {
-		database.Put(k, "value")
+		if err := database.Put(k, "value"); err != nil {
+			b.Fatalf("setup put: %v", err)
+		}
 	}
 	// force to disk so reads hit SSTable, not memtable
 	if err := database.ForceFlush(); err != nil {
@@ -142,9 +152,12 @@ func BenchmarkGetSSTableHit(b *testing.B) {
 
 	b.ResetTimer()
 	b.ReportAllocs()
+	b.SetBytes(int64(len("value")))
 
 	for i := 0; i < b.N; i++ {
-		database.Get(keys[i%keyCount])
+		if _, ok := database.Get(keys[i%keyCount]); !ok {
+			b.Fatalf("expected hit for %s, got miss", keys[i%keyCount])
+		}
 	}
 }
 
@@ -159,9 +172,13 @@ func BenchmarkGetMiss(b *testing.B) {
 
 	// seed with keys 0..9999, flushed to multiple SSTables
 	for _, k := range sequentialKeys(10_000) {
-		database.Put(k, "value")
+		if err := database.Put(k, "value"); err != nil {
+			b.Fatalf("setup put: %v", err)
+		}
 	}
-	database.ForceFlush()
+	if err := database.ForceFlush(); err != nil {
+		b.Fatalf("setup flush: %v", err)
+	}
 
 	// keys 1M+ will never exist
 	missKeys := make([]string, b.N)
@@ -173,7 +190,9 @@ func BenchmarkGetMiss(b *testing.B) {
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
-		database.Get(missKeys[i])
+		if _, ok := database.Get(missKeys[i]); ok {
+			b.Fatalf("expected miss for %s, got hit", missKeys[i])
+		}
 	}
 }
 
@@ -190,9 +209,13 @@ func BenchmarkGetMissScaled(b *testing.B) {
 			// create exactly sstCount SSTables
 			for s := 0; s < sstCount; s++ {
 				for i := 0; i < 500; i++ {
-					database.Put(fmt.Sprintf("sst%d-key-%08d", s, i), "value")
+					if err := database.Put(fmt.Sprintf("sst%d-key-%08d", s, i), "value"); err != nil {
+						b.Fatalf("setup put: %v", err)
+					}
 				}
-				database.ForceFlush()
+				if err := database.ForceFlush(); err != nil {
+					b.Fatalf("setup flush: %v", err)
+				}
 			}
 
 			missKeys := make([]string, b.N)
@@ -204,7 +227,9 @@ func BenchmarkGetMissScaled(b *testing.B) {
 			b.ReportAllocs()
 
 			for i := 0; i < b.N; i++ {
-				database.Get(missKeys[i])
+				if _, ok := database.Get(missKeys[i]); ok {
+					b.Fatalf("expected miss for %s, got hit", missKeys[i])
+				}
 			}
 		})
 	}
@@ -222,14 +247,19 @@ func BenchmarkDelete(b *testing.B) {
 	// reused for the delete loop below instead of rebuilding it.
 	keys := sequentialKeys(b.N)
 	for _, k := range keys {
-		database.Put(k, "value")
+		if err := database.Put(k, "value"); err != nil {
+			b.Fatalf("setup put: %v", err)
+		}
 	}
 
 	b.ResetTimer()
 	b.ReportAllocs()
+	b.SetBytes(int64(len("key-00000000")))
 
 	for i := 0; i < b.N; i++ {
-		database.Delete(keys[i])
+		if err := database.Delete(keys[i]); err != nil {
+			b.Fatalf("delete: %v", err)
+		}
 	}
 }
 
@@ -245,13 +275,16 @@ func BenchmarkMixed(b *testing.B) {
 	const seedCount = 1000
 	seedKeys := sequentialKeys(seedCount)
 	for _, k := range seedKeys {
-		database.Put(k, "seed-value")
+		if err := database.Put(k, "seed-value"); err != nil {
+			b.Fatalf("setup put: %v", err)
+		}
 	}
 
 	writeKeys := sequentialKeys(b.N)
 
 	b.ResetTimer()
 	b.ReportAllocs()
+	b.SetBytes(int64(len("key-00000000") + len("value")))
 
 	for i := 0; i < b.N; i++ {
 		if i%5 == 0 {
@@ -259,7 +292,9 @@ func BenchmarkMixed(b *testing.B) {
 			database.Get(seedKeys[i%seedCount])
 		} else {
 			// 80% writes
-			database.Put(writeKeys[i], "value")
+			if err := database.Put(writeKeys[i], "value"); err != nil {
+				b.Fatalf("put: %v", err)
+			}
 		}
 	}
 }
@@ -276,11 +311,16 @@ func BenchmarkCompactionThroughput(b *testing.B) {
 
 	b.ResetTimer()
 	b.ReportAllocs()
+	b.SetBytes(int64(len("key-00000000") + len("value")))
 
 	for i := 0; i < b.N; i++ {
-		database.Put(keys[i], "value")
+		if err := database.Put(keys[i], "value"); err != nil {
+			b.Fatalf("put: %v", err)
+		}
 		if i > 0 && i%500 == 0 {
-			database.ForceFlush()
+			if err := database.ForceFlush(); err != nil {
+				b.Fatalf("flush: %v", err)
+			}
 		}
 	}
 }
