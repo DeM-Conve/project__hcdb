@@ -46,18 +46,29 @@ func randomNumberGenerator() *rand.Rand {
 	return rand.New(rand.NewSource(42))
 }
 
+// sequentialKeys pre-generates n keys of the form "key-00000000" so key
+// construction (fmt.Sprintf) never runs inside a timed loop.
+func sequentialKeys(n int) []string {
+	keys := make([]string, n)
+	for i := range keys {
+		keys[i] = fmt.Sprintf("key-%08d", i)
+	}
+	return keys
+}
+
 // ─── sequential write ────────────────────────────────────────────────────────
 
 func BenchmarkPutSequential(b *testing.B) {
 	database, cleanup := openDB(b)
 	defer cleanup()
 
+	keys := sequentialKeys(b.N)
+
 	b.ResetTimer()
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
-		key := fmt.Sprintf("key-%08d", i)
-		if err := database.Put(key, "value-benchmark-payload-32bytes!!"); err != nil {
+		if err := database.Put(keys[i], "value-benchmark-payload-32bytes!!"); err != nil {
 			b.Fatalf("put: %v", err)
 		}
 	}
@@ -98,16 +109,16 @@ func BenchmarkGetMemtableHit(b *testing.B) {
 
 	// write without flushing so all keys stay in memtable
 	const keyCount = 10_000
-	for i := 0; i < keyCount; i++ {
-		database.Put(fmt.Sprintf("key-%08d", i), "value")
+	keys := sequentialKeys(keyCount)
+	for _, k := range keys {
+		database.Put(k, "value")
 	}
 
 	b.ResetTimer()
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
-		key := fmt.Sprintf("key-%08d", i%keyCount)
-		database.Get(key)
+		database.Get(keys[i%keyCount])
 	}
 }
 
@@ -120,8 +131,9 @@ func BenchmarkGetSSTableHit(b *testing.B) {
 	defer cleanup()
 
 	const keyCount = 10_000
-	for i := 0; i < keyCount; i++ {
-		database.Put(fmt.Sprintf("key-%08d", i), "value")
+	keys := sequentialKeys(keyCount)
+	for _, k := range keys {
+		database.Put(k, "value")
 	}
 	// force to disk so reads hit SSTable, not memtable
 	if err := database.ForceFlush(); err != nil {
@@ -132,8 +144,7 @@ func BenchmarkGetSSTableHit(b *testing.B) {
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
-		key := fmt.Sprintf("key-%08d", i%keyCount)
-		database.Get(key)
+		database.Get(keys[i%keyCount])
 	}
 }
 
@@ -147,18 +158,22 @@ func BenchmarkGetMiss(b *testing.B) {
 	defer cleanup()
 
 	// seed with keys 0..9999, flushed to multiple SSTables
-	for i := 0; i < 10_000; i++ {
-		database.Put(fmt.Sprintf("key-%08d", i), "value")
+	for _, k := range sequentialKeys(10_000) {
+		database.Put(k, "value")
 	}
 	database.ForceFlush()
+
+	// keys 1M+ will never exist
+	missKeys := make([]string, b.N)
+	for i := range missKeys {
+		missKeys[i] = fmt.Sprintf("key-%08d", 1_000_000+i)
+	}
 
 	b.ResetTimer()
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
-		// keys 1M+ will never exist
-		key := fmt.Sprintf("key-%08d", 1_000_000+i)
-		database.Get(key)
+		database.Get(missKeys[i])
 	}
 }
 
@@ -180,12 +195,16 @@ func BenchmarkGetMissScaled(b *testing.B) {
 				database.ForceFlush()
 			}
 
+			missKeys := make([]string, b.N)
+			for i := range missKeys {
+				missKeys[i] = fmt.Sprintf("zzz-missing-%08d", i)
+			}
+
 			b.ResetTimer()
 			b.ReportAllocs()
 
 			for i := 0; i < b.N; i++ {
-				// key that will never exist
-				database.Get(fmt.Sprintf("zzz-missing-%08d", i))
+				database.Get(missKeys[i])
 			}
 		})
 	}
@@ -199,16 +218,18 @@ func BenchmarkDelete(b *testing.B) {
 	database, cleanup := openDB(b)
 	defer cleanup()
 
-	// pre-populate so deletes have real keys to target
-	for i := 0; i < b.N; i++ {
-		database.Put(fmt.Sprintf("key-%08d", i), "value")
+	// pre-populate so deletes have real keys to target; same key set is
+	// reused for the delete loop below instead of rebuilding it.
+	keys := sequentialKeys(b.N)
+	for _, k := range keys {
+		database.Put(k, "value")
 	}
 
 	b.ResetTimer()
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
-		database.Delete(fmt.Sprintf("key-%08d", i))
+		database.Delete(keys[i])
 	}
 }
 
@@ -221,9 +242,13 @@ func BenchmarkMixed(b *testing.B) {
 	defer cleanup()
 
 	// seed some keys so reads have something to find
-	for i := 0; i < 1000; i++ {
-		database.Put(fmt.Sprintf("key-%08d", i), "seed-value")
+	const seedCount = 1000
+	seedKeys := sequentialKeys(seedCount)
+	for _, k := range seedKeys {
+		database.Put(k, "seed-value")
 	}
+
+	writeKeys := sequentialKeys(b.N)
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -231,10 +256,10 @@ func BenchmarkMixed(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		if i%5 == 0 {
 			// 20% reads
-			database.Get(fmt.Sprintf("key-%08d", i%1000))
+			database.Get(seedKeys[i%seedCount])
 		} else {
 			// 80% writes
-			database.Put(fmt.Sprintf("key-%08d", i), "value")
+			database.Put(writeKeys[i], "value")
 		}
 	}
 }
@@ -247,11 +272,13 @@ func BenchmarkCompactionThroughput(b *testing.B) {
 	database, cleanup := openDB(b)
 	defer cleanup()
 
+	keys := sequentialKeys(b.N)
+
 	b.ResetTimer()
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
-		database.Put(fmt.Sprintf("key-%08d", i), "value")
+		database.Put(keys[i], "value")
 		if i > 0 && i%500 == 0 {
 			database.ForceFlush()
 		}
