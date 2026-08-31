@@ -13,24 +13,21 @@ import (
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
-func openDB(t testing.TB) *db.DB {
-	dir := t.TempDir()
+// TODO: hardcoded real-disk path so benchmarks run on real disk without any
+const benchDiskRoot = "/home/harsh-chauhan/z_drive/PERSONAL/project__hcdb/.benchdata"
 
-	database, err := db.Open(config.Config{WALPath: filepath.Join(dir, "main.wal"), SSTDir: filepath.Join(dir, "sstables")})
-	if err != nil {
-		t.Fatalf("open db: %v", err)
+func openDB(t testing.TB) (*db.DB, func()) {
+	dir := filepath.Join(benchDiskRoot, t.Name())
+
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatalf("clean bench dir: %v", err)
+	}
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatalf("create bench dir: %v", err)
 	}
 
-	return database
-}
-
-func openFreshDB(t testing.TB, tag string) (*db.DB, func()) {
-	walPath := fmt.Sprintf("/tmp/hcdb_bench_%s.wal", tag)
-	sstDir := fmt.Sprintf("/tmp/hcdb_bench_%s_sst", tag)
-
-	// always start clean
-	os.Remove(walPath)
-	os.RemoveAll(sstDir)
+	walPath := filepath.Join(dir, "main.wal")
+	sstDir := filepath.Join(dir, "sstables")
 
 	database, err := db.Open(config.Config{WALPath: walPath, SSTDir: sstDir})
 	if err != nil {
@@ -39,18 +36,21 @@ func openFreshDB(t testing.TB, tag string) (*db.DB, func()) {
 
 	cleanup := func() {
 		database.Close()
-		os.Remove(walPath)
-		os.RemoveAll(sstDir)
+		os.RemoveAll(dir)
 	}
 
 	return database, cleanup
 }
 
+func randomNumberGenerator() *rand.Rand {
+	return rand.New(rand.NewSource(42))
+}
+
 // ─── sequential write ────────────────────────────────────────────────────────
 
 func BenchmarkPutSequential(b *testing.B) {
-	database := openDB(b)
-	defer database.Close()
+	database, cleanup := openDB(b)
+	defer cleanup()
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -68,12 +68,14 @@ func BenchmarkPutSequential(b *testing.B) {
 // BenchmarkPutRandom measures write throughput with random keys.
 // Stresses compaction more than sequential because key distribution is scattered.
 func BenchmarkPutRandom(b *testing.B) {
-	database, cleanup := openFreshDB(b, "put_rand")
+	database, cleanup := openDB(b)
 	defer cleanup()
+
+	var rng *rand.Rand = randomNumberGenerator()
 
 	keys := make([]string, b.N)
 	for i := range keys {
-		keys[i] = fmt.Sprintf("key-%016d", rand.Int63())
+		keys[i] = fmt.Sprintf("key-%016d", rng.Int63())
 	}
 
 	b.ResetTimer()
@@ -91,7 +93,7 @@ func BenchmarkPutRandom(b *testing.B) {
 // BenchmarkGetMemtableHit measures read latency when the key is in memtable.
 // Best-case read path: no SSTable I/O at all.
 func BenchmarkGetMemtableHit(b *testing.B) {
-	database, cleanup := openFreshDB(b, "get_mem")
+	database, cleanup := openDB(b)
 	defer cleanup()
 
 	// write without flushing so all keys stay in memtable
@@ -114,7 +116,7 @@ func BenchmarkGetMemtableHit(b *testing.B) {
 // BenchmarkGetSSTableHit measures read latency when the key has been flushed
 // to disk. Exercises: index binary search + block read + block decode.
 func BenchmarkGetSSTableHit(b *testing.B) {
-	database, cleanup := openFreshDB(b, "get_sst")
+	database, cleanup := openDB(b)
 	defer cleanup()
 
 	const keyCount = 10_000
@@ -141,7 +143,7 @@ func BenchmarkGetSSTableHit(b *testing.B) {
 // Must scan ALL SSTables before returning not-found.
 // This is what Bloom filters fix — good to show the before number.
 func BenchmarkGetMiss(b *testing.B) {
-	database, cleanup := openFreshDB(b, "get_miss")
+	database, cleanup := openDB(b)
 	defer cleanup()
 
 	// seed with keys 0..9999, flushed to multiple SSTables
@@ -167,7 +169,7 @@ func BenchmarkGetMissScaled(b *testing.B) {
 	for _, sstCount := range []int{1, 5, 10, 20} {
 		sstCount := sstCount
 		b.Run(fmt.Sprintf("SSTables-%d", sstCount), func(b *testing.B) {
-			database, cleanup := openFreshDB(b, fmt.Sprintf("miss_scaled_%d", sstCount))
+			database, cleanup := openDB(b)
 			defer cleanup()
 
 			// create exactly sstCount SSTables
@@ -194,7 +196,7 @@ func BenchmarkGetMissScaled(b *testing.B) {
 // BenchmarkDelete measures tombstone write throughput.
 // Same path as Put (WAL + memtable) but writes a tombstone entry.
 func BenchmarkDelete(b *testing.B) {
-	database, cleanup := openFreshDB(b, "delete")
+	database, cleanup := openDB(b)
 	defer cleanup()
 
 	// pre-populate so deletes have real keys to target
@@ -215,7 +217,7 @@ func BenchmarkDelete(b *testing.B) {
 // BenchmarkMixed simulates a realistic write-heavy workload.
 // 80% puts, 20% gets against recently written keys.
 func BenchmarkMixed(b *testing.B) {
-	database, cleanup := openFreshDB(b, "mixed")
+	database, cleanup := openDB(b)
 	defer cleanup()
 
 	// seed some keys so reads have something to find
@@ -242,7 +244,7 @@ func BenchmarkMixed(b *testing.B) {
 // BenchmarkCompactionThroughput measures write throughput when compaction
 // fires repeatedly. Forces a flush every 500 ops to trigger compaction often.
 func BenchmarkCompactionThroughput(b *testing.B) {
-	database, cleanup := openFreshDB(b, "compact")
+	database, cleanup := openDB(b)
 	defer cleanup()
 
 	b.ResetTimer()

@@ -1,2 +1,3 @@
 *.wal
 *.sst
+.benchdata/
