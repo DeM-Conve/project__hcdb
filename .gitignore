@@ -1,3 +1,5 @@
 *.wal
 *.sst
 .benchdata/
+*.test
+*.out
