@@ -9,8 +9,10 @@ import (
 	"github.com/hchauhan7816/hcdb/config"
 )
 
-func WriteSSTableFromBlockEntries(filePath string, entries []BlockEntry) (*SSTable, error) {
-	file, err := os.OpenFile(filePath, os.O_CREATE|os.O_RDWR, 0644)
+func WriteSSTableFromBlockEntries(finalPath string, entries []BlockEntry) (*SSTable, error) {
+	tmpPath := finalPath + ".tmp"
+
+	file, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
 		return nil, err
 	}
@@ -89,6 +91,9 @@ func WriteSSTableFromBlockEntries(filePath string, entries []BlockEntry) (*SSTab
 	if err := file.Sync(); err != nil {
 		return nil, err
 	}
+	if err := atomicInstall(tmpPath, finalPath); err != nil {
+		return nil, err
+	}
 
-	return &SSTable{FilePath: filePath, index: indexEntries, bloom: bloom}, nil
+	return &SSTable{FilePath: finalPath, index: indexEntries, bloom: bloom}, nil
 }

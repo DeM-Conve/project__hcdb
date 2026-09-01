@@ -40,9 +40,10 @@ import (
 
 func Flush(memTable *memtable.MemTable, dirPath string) (*SSTable, error) {
 
-	filePath := fmt.Sprintf("%s/%d.sst", dirPath, time.Now().UnixNano())
+	finalPath := fmt.Sprintf("%s/%d.sst", dirPath, time.Now().UnixNano())
+	tmpPath := finalPath + ".tmp"
 
-	file, err := os.OpenFile(filePath, os.O_CREATE|os.O_RDWR, 0644)
+	file, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
 		return nil, err
 	}
@@ -131,8 +132,11 @@ func Flush(memTable *memtable.MemTable, dirPath string) (*SSTable, error) {
 	if err := file.Sync(); err != nil {
 		return nil, err
 	}
+	if err := atomicInstall(tmpPath, finalPath); err != nil {
+		return nil, err
+	}
 
-	return &SSTable{FilePath: filePath, index: indexEntries, bloom: bloom}, nil
+	return &SSTable{FilePath: finalPath, index: indexEntries, bloom: bloom}, nil
 }
 
 func indexSize(entries []IndexEntry) int64 {
