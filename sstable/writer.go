@@ -38,7 +38,7 @@ import (
 //
 // ============================================================
 
-func Flush(memTable *memtable.MemTable, dirPath string) (*SSTable, error) {
+func Flush(memTable *memtable.MemTable, dirPath string) (sst *SSTable, err error) {
 
 	finalPath := fmt.Sprintf("%s/%d.sst", dirPath, time.Now().UnixNano())
 	tmpPath := finalPath + ".tmp"
@@ -48,6 +48,11 @@ func Flush(memTable *memtable.MemTable, dirPath string) (*SSTable, error) {
 		return nil, err
 	}
 	defer file.Close()
+	defer func() {
+		if err != nil {
+			os.Remove(tmpPath)
+		}
+	}()
 
 	writer := bufio.NewWriter(file)
 	bloom := bloomfilter.NewBloomFilter(config.DEFAULT_BLOOM_EXPECTED_KEYS)

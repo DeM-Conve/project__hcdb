@@ -9,7 +9,7 @@ import (
 	"github.com/hchauhan7816/hcdb/config"
 )
 
-func WriteSSTableFromBlockEntries(finalPath string, entries []BlockEntry) (*SSTable, error) {
+func WriteSSTableFromBlockEntries(finalPath string, entries []BlockEntry) (sst *SSTable, err error) {
 	tmpPath := finalPath + ".tmp"
 
 	file, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_RDWR, 0644)
@@ -17,6 +17,11 @@ func WriteSSTableFromBlockEntries(finalPath string, entries []BlockEntry) (*SSTa
 		return nil, err
 	}
 	defer file.Close()
+	defer func() {
+		if err != nil {
+			os.Remove(tmpPath)
+		}
+	}()
 
 	writer := bufio.NewWriter(file)
 	bloom := bloomfilter.NewBloomFilter(config.DEFAULT_BLOOM_EXPECTED_KEYS)
