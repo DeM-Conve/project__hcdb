@@ -193,6 +193,21 @@ func main() {
 	printGet(database, "b")     // not found — deleted
 	printGet(database, "c")     // 3
 	printGet(database, "g")     // 7
+
+	fmt.Println("\n--- range scan [a, h] across memtable + all sstables ---")
+	printScan(database, []byte("a"), []byte("h"))
+}
+
+func printScan(database *db.DB, lowerBound, upperBound []byte) {
+	it, err := database.Scan(lowerBound, upperBound)
+	if err != nil {
+		fmt.Println("scan error:", err)
+		return
+	}
+
+	for it.Next() {
+		fmt.Printf("%s => %s\n", it.Key(), it.Value())
+	}
 }
 
 func printGet(database *db.DB, key string) {
