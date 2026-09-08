@@ -32,7 +32,10 @@ func Open(conf config.Config) (*DB, error) {
 		return nil, err
 	}
 
-	blockCache := cache.NewLRU(config.DEFAULT_BLOCK_CACHE_ENTRIES)
+	blockCache := cache.NewShardedLRU(
+		config.DEFAULT_CACHE_SHARD_COUNT,
+		config.DEFAULT_BLOCK_CACHE_ENTRIES/config.DEFAULT_CACHE_SHARD_COUNT,
+	)
 	for _, sst := range tables {
 		sst.SetCache(blockCache)
 	}

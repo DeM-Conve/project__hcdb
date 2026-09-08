@@ -71,3 +71,40 @@ func BenchmarkCacheGetParallel(b *testing.B) {
 		}
 	})
 }
+
+func BenchmarkShardedCachePutParallel(b *testing.B) {
+	c := cache.NewShardedLRU(16, 64) // 16 shards * 64 = 1024, same total as BenchmarkCachePutParallel
+
+	var counter atomic.Int64
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			n := counter.Add(1)
+			key := fmt.Sprintf("key-%08d", n)
+			c.Put(key, n)
+		}
+	})
+}
+
+func BenchmarkShardedCacheGetParallel(b *testing.B) {
+	c := cache.NewShardedLRU(16, 64)
+	for i := 0; i < 1024; i++ {
+		c.Put(fmt.Sprintf("key-%08d", i), i)
+	}
+
+	var counter atomic.Int64
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			n := counter.Add(1)
+			key := fmt.Sprintf("key-%08d", n%1024)
+			c.Get(key)
+		}
+	})
+}

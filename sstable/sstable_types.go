@@ -29,11 +29,9 @@ type SSTable struct {
 	FilePath string
 	index    []IndexEntry
 	bloom    *bloomfilter.BloomFilter // loaded from disk on Open
-	cache    *cache.LRU               // shared block cache, set via SetCache
+	cache    cache.Cacher             // set via SetCache
 }
 
-// SetCache attaches the shared block cache used by readBlock. Called once
-// by the DB layer after the SSTable is opened or created.
-func (sst *SSTable) SetCache(c *cache.LRU) {
+func (sst *SSTable) SetCache(c cache.Cacher) {
 	sst.cache = c
 }

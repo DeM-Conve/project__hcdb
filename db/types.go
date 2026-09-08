@@ -16,5 +16,5 @@ type DB struct {
 	memtable   *memtable.MemTable
 	sstables   []*sstable.SSTable
 	conf       config.Config
-	blockCache *cache.LRU
+	blockCache cache.Cacher
 }

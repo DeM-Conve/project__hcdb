@@ -18,7 +18,8 @@ const (
 	DEFAULT_BLOOM_FALSE_POSITIVE_RATE = 0.01   // 1% false positive rate
 	DEFAULT_BLOOM_EXPECTED_KEYS       = 100000 // expected keys per SSTable
 
-	DEFAULT_BLOCK_CACHE_ENTRIES = 256 // ~1MB of decoded blocks at DEFAULT_BLOCK_SIZE
+	DEFAULT_BLOCK_CACHE_ENTRIES = 256 // ~1MB of decoded blocks at DEFAULT_BLOCK_SIZE, total across shards
+	DEFAULT_CACHE_SHARD_COUNT   = 16  // DEFAULT_BLOCK_CACHE_ENTRIES / DEFAULT_CACHE_SHARD_COUNT entries per shard
 )
 
 type Config struct {
