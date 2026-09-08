@@ -8,7 +8,7 @@ import (
 
 type Item struct {
 	Type  uint8
-	Key   []byte
+	Key   []byte // encoded internal key: user key + 8-byte trailer
 	Value []byte
 }
 

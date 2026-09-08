@@ -7,8 +7,15 @@ import (
 
 	"github.com/hchauhan7816/hcdb/bloomfilter"
 	"github.com/hchauhan7816/hcdb/config"
+	"github.com/hchauhan7816/hcdb/internal/base"
 )
 
+// WriteSSTableFromBlockEntries is the compaction-side writer. It produces
+// byte-identical output to Flush — see writer.go for the file layout — but
+// takes an already-merged []BlockEntry instead of walking a memtable.
+//
+// Entries must already be sorted by internal key; compaction calls
+// SortEntries before getting here.
 func WriteSSTableFromBlockEntries(finalPath string, entries []BlockEntry) (sst *SSTable, err error) {
 	tmpPath := finalPath + ".tmp"
 
@@ -33,7 +40,7 @@ func WriteSSTableFromBlockEntries(finalPath string, entries []BlockEntry) (sst *
 
 	// add all keys to bloom
 	for _, e := range entries {
-		bloom.Add(e.Key)
+		bloom.Add(base.DecodeInternalKey(e.Key).UserKey)
 	}
 
 	flushCurrent := func() error {

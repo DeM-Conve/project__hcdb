@@ -14,13 +14,13 @@ const (
 )
 
 type BlockEntry struct {
-	Key   []byte
+	Key   []byte // encoded internal key: user key + 8-byte trailer
 	Value []byte
 	Type  uint8
 }
 
 type IndexEntry struct {
-	FirstKey []byte
+	FirstKey []byte // first encoded internal key in the block
 	Offset   int64
 	Length   int32
 }

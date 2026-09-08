@@ -10,47 +10,19 @@ import (
 )
 
 // ============================================================
-// SSTable Read Flow:
+// Opening SSTables. For the lookup path itself see sstable.go, and for the
+// on-disk layout see writer.go.
+//
+// Open:
 //
 // 1. Open file
 // 2. Read footer (last 20 bytes)
 //      → get indexOffset, numEntries, and bloomOffset
-// 3. Load index into memory
+// 3. Load index into memory (stays resident for the SSTable's lifetime)
 // 4. Load Bloom filter from bloomOffset
-// 5. On lookup, check Bloom first
-// 6. If Bloom may contain key: binary search index, read block, scan block entries
-//
-// ------------------------------------------------------------
-// Lookup Flow:
-//
-//   key → bloom.MightContain()
-//       ├─ no  → KEY_ABSENT (skip disk block read)
-//       └─ yes → searchIndex() → blockIdx
-//                → readBlock(offset, length)
-//                → decodeBlock()
-//                → findInBlock()
-//
-// ------------------------------------------------------------
-// Key Insight:
-//
-// - IndexEntry → helps locate block (log N)
-// - BlockEntry → actual data (scan within block)
+// 5. Close the file — data blocks are read on demand, not held open
 //
 // ============================================================
-
-// Binary search on index entries.
-// Returns the index of the block whose FirstKey <= target key.
-//
-// Example:
-//
-// Index:
-//   [a, d, g]
-//
-// Search key = "e"
-//
-// Result:
-//   returns index of "d" → block 2
-//
 
 func Open(filepath string) (*SSTable, error) {
 	file, err := os.Open(filepath)

@@ -9,33 +9,55 @@ import (
 
 	"github.com/hchauhan7816/hcdb/bloomfilter"
 	"github.com/hchauhan7816/hcdb/config"
+	"github.com/hchauhan7816/hcdb/internal/base"
 	"github.com/hchauhan7816/hcdb/memtable"
 )
 
 // ============================================================
 // SSTable Write Flow:
 //
-// Memtable (sorted)
+// Memtable (sorted by internal key: user key asc, seqNum desc)
 //      ↓
 // Split into blocks (~4KB each)
 //      ↓
 // Write blocks sequentially to file
 //      ↓
 // Build IndexEntry for each block:
-//      - FirstKey
+//      - FirstKey (the block's first INTERNAL key)
 //      - Offset
 //      - Length
 //      ↓
 // Write index section
 //      ↓
 // Write bloom bytes (BloomLen + BloomBytes)
+//      NOTE: the bloom indexes USER keys, not internal keys, because Lookup
+//      probes it with a user key before it knows any sequence number.
 //      ↓
 // Write footer (indexOffset + numEntries + bloomOffset)
 //
-// Final File:
+// ------------------------------------------------------------
+// Final File Layout (the canonical picture — other files in this package
+// document only their own section and point here):
 //
-//   [ Block 1 ][ Block 2 ] ... [ Index ][ BloomLen+BloomBytes ][ Footer ]
+//   +----------------------------+  offset 0
+//   | Block 1            (~4KB)  |
+//   | Block 2            (~4KB)  |
+//   | ...                        |
+//   +----------------------------+  ← indexOffset
+//   | IndexEntry 1               |
+//   | IndexEntry 2               |
+//   | ...                        |
+//   +----------------------------+  ← bloomOffset
+//   | bloomLen (4B) + bloomBytes |
+//   +----------------------------+
+//   | Footer            (20B)    |
+//   +----------------------------+  EOF
 //
+// Data first, metadata last: block offsets aren't known until the blocks are
+// written, so the index can only follow them. The footer sits at a fixed
+// offset from EOF — the only section locatable without scanning the file.
+//
+// See block.go for a block's contents, index.go for IndexEntry and Footer.
 // ============================================================
 
 func Flush(memTable *memtable.MemTable, dirPath string) (sst *SSTable, err error) {
@@ -63,7 +85,8 @@ func Flush(memTable *memtable.MemTable, dirPath string) (sst *SSTable, err error
 
 	var iterErr error
 	memTable.Ascend(func(key, value []byte, itemType uint8) bool {
-		bloom.Add(key)
+		// key is an internal key; the bloom filter is probed with user keys
+		bloom.Add(base.DecodeInternalKey(key).UserKey)
 		blockCollector.add(BlockEntry{Key: key, Value: value, Type: itemType})
 
 		if blockCollector.size() >= config.DEFAULT_BLOCK_SIZE {

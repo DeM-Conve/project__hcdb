@@ -1,11 +1,18 @@
 package memtable
 
-import "github.com/google/btree"
+import (
+	"bytes"
+
+	"github.com/google/btree"
+	"github.com/hchauhan7816/hcdb/internal/base"
+)
 
 // Iterator eagerly collects the memtable's entries within [lowerBound,
 // upperBound] into a sorted slice. Safe to do eagerly here — unlike an
 // SSTable, the memtable is already bounded, in-memory data, so there's no
 // disk-read cost to defer.
+//
+// Bounds are user keys; the entries it yields carry encoded internal keys.
 type Iterator struct {
 	entries []Item
 	pos     int
@@ -16,11 +23,13 @@ func NewIterator(mt *MemTable, lowerBound, upperBound []byte) *Iterator {
 	defer mt.mut.RUnlock()
 
 	it := &Iterator{}
-	pivot := Item{Key: lowerBound}
+	pivot := Item{Key: encodeSearchKey(lowerBound)}
 
 	mt.tree.AscendGreaterOrEqual(pivot, func(i btree.Item) bool {
 		item := i.(Item)
-		if upperBound != nil && string(item.Key) > string(upperBound) {
+		userKey := base.DecodeInternalKey(item.Key).UserKey
+
+		if upperBound != nil && bytes.Compare(userKey, upperBound) > 0 {
 			return false
 		}
 		it.entries = append(it.entries, item)

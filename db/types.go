@@ -2,6 +2,7 @@ package db
 
 import (
 	"sync"
+	"sync/atomic"
 
 	"github.com/hchauhan7816/hcdb/cache"
 	"github.com/hchauhan7816/hcdb/config"
@@ -17,4 +18,5 @@ type DB struct {
 	sstables   []*sstable.SSTable
 	conf       config.Config
 	blockCache cache.Cacher
+	seqNum     atomic.Uint64 // last assigned sequence number
 }

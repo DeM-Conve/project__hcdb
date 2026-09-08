@@ -21,9 +21,8 @@ func (walObj *WAL) Put(keyByte []byte, valueByte []byte) error {
 	return nil
 }
 
-func (walObj *WAL) Delete(key string) error {
+func (walObj *WAL) Delete(keyByte []byte) error {
 
-	var keyByte = []byte(key)
 	var valueByte = []byte{}
 
 	var entry Entry = Entry{Key: keyByte, Value: valueByte, Type: config.OP_DELETE}

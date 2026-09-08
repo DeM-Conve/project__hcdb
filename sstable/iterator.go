@@ -1,9 +1,14 @@
 package sstable
 
-import "bytes"
+import (
+	"bytes"
 
-// Iterator walks an SSTable's entries in sorted key order, starting from
-// the first key >= lowerBound. It is one "source" in a k-way merge.
+	"github.com/hchauhan7816/hcdb/internal/base"
+)
+
+// Iterator walks an SSTable's entries in internal-key order, starting from
+// the first key >= lowerBound (a user key). It is one "source" in a k-way
+// merge, and the keys it yields are encoded internal keys.
 type Iterator struct {
 	sst      *SSTable
 	blockIdx int
@@ -15,7 +20,9 @@ type Iterator struct {
 func NewIterator(sst *SSTable, lowerBound []byte) (*Iterator, error) {
 	it := &Iterator{sst: sst}
 
-	it.blockIdx = searchIndex(sst.index, lowerBound)
+	seekKey := base.DecodeInternalKey(EncodeSearchKey(lowerBound))
+
+	it.blockIdx = searchIndex(sst.index, EncodeSearchKey(lowerBound))
 	if it.blockIdx < 0 {
 		it.blockIdx = 0 // lowerBound is before the first block's first key
 	}
@@ -24,7 +31,11 @@ func NewIterator(sst *SSTable, lowerBound []byte) (*Iterator, error) {
 		return nil, err
 	}
 
-	for it.valid && bytes.Compare(it.entries[it.pos].Key, lowerBound) < 0 {
+	for it.valid {
+		current := base.DecodeInternalKey(it.entries[it.pos].Key)
+		if base.InternalCompare(bytes.Compare, current, seekKey) >= 0 {
+			break
+		}
 		if !it.advance() {
 			break
 		}

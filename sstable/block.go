@@ -9,25 +9,8 @@ import (
 )
 
 // ============================================================
-// SSTable Block Layout (on disk)
+// Block encoding. For where blocks sit inside the file, see writer.go.
 //
-// Each SSTable file is structured as:
-//
-//   +-------------------+
-//   |   Block 1         |
-//   +-------------------+
-//   |   Block 2         |
-//   +-------------------+
-//   |   ...             |
-//   +-------------------+
-//   |   Index           |
-//   +-------------------+
-//   |   BloomLen+Bloom  |
-//   +-------------------+
-//   |   Footer          |
-//   +-------------------+
-//
-// ------------------------------------------------------------
 // Block Format:
 //
 //   +----------------------+
@@ -43,16 +26,24 @@ import (
 // ------------------------------------------------------------
 // BlockEntry (each record inside block):
 //
-//   +--------+---------+----------+-------+--------+
-//   | Type   | keyLen  | valLen   | key   | value  |
-//   | 1 byte | 4 bytes | 4 bytes  | bytes | bytes  |
-//   +--------+---------+----------+-------+--------+
+//   +--------+---------+----------+---------------+--------+
+//   | Type   | keyLen  | valLen   | internal key  | value  |
+//   | 1 byte | 4 bytes | 4 bytes  | bytes         | bytes  |
+//   +--------+---------+----------+---------------+--------+
+//
+//   internal key = user key + 8-byte trailer (seqNum<<8 | kind), so keyLen
+//   is len(userKey)+8. See internal/base.
 //
 //
 // Notes:
 // - Blocks are ~4KB in size
 // - CRC is used for corruption detection
 // - Entire block is read at once during lookup
+// - Entries are sorted by user key ascending, then sequence number
+//   descending, so multiple versions of one user key sit next to each other
+//   with the newest first
+// - Type duplicates the kind already packed into the trailer; it is kept
+//   because the read path still switches on it
 // ============================================================
 
 func encodeBlock(entries []BlockEntry) ([]byte, error) {

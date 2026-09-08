@@ -17,6 +17,7 @@ func (bc *blockCollector) add(e BlockEntry) {
 	}
 
 	bc.entries = append(bc.entries, e)
+	// e.Key is an internal key, so its 8-byte trailer is already in len(e.Key)
 	bc.sizeEstimate += len(e.Key) + len(e.Value) + 9 // type(1)+keyLen(4)+valLen(4)
 }
 

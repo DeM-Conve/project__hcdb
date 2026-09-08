@@ -4,47 +4,44 @@ import (
 	"bytes"
 	"encoding/binary"
 	"io"
+
+	"github.com/hchauhan7816/hcdb/internal/base"
 )
 
 // ============================================================
-// Index + Footer Layout (on disk)
+// Index and footer encoding, plus the binary search over the index.
+// For where these sections sit inside the file, see writer.go.
 //
-// After all blocks are written, we write:
-//
-//   +---------------------------+
-//   | IndexEntry 1              |
-//   | IndexEntry 2              |
-//   | ...                       |
-//   +---------------------------+
-//   | BloomLen + BloomBytes     |
-//   +---------------------------+
-//   | Footer                    |
-//   +---------------------------+
-//
-// ------------------------------------------------------------
 // IndexEntry Format:
 //
-//   +-----------+-------+--------+--------+
-//   | keyLen    | key   | offset | length |
-//   | 4 bytes   | bytes | int64  | int32  |
-//   +-----------+-------+--------+--------+
+//   +-----------+---------------+--------+--------+
+//   | keyLen    | internal key  | offset | length |
+//   | 4 bytes   | bytes         | int64  | int32  |
+//   +-----------+---------------+--------+--------+
 //
 // Fields:
-// - FirstKey → first key of the block
+// - FirstKey → first INTERNAL key of the block (user key + 8-byte trailer),
+//              so keyLen covers the trailer too
 // - Offset   → starting position of block in file
 // - Length   → size of block in bytes
 //
-// Example:
+// Example (a@N means user key "a" at sequence number N; a user key can appear
+// more than once, newest sequence number first):
 //
-//   Block 1: [a, b, c]
-//   Block 2: [d, e, f]
-//   Block 3: [g, h, i]
+//   Block 1: [a@7, a@2, b@5]
+//   Block 2: [d@9, e@1, f@4]
+//   Block 3: [g@8, h@3, i@6]
 //
 //   Index:
 //
-//   [a -> block1]
-//   [d -> block2]
-//   [g -> block3]
+//   [a@7 -> block1]
+//   [d@9 -> block2]
+//   [g@8 -> block3]
+//
+// Ordering is base.InternalCompare: user key ascending, then sequence number
+// descending. Lookups build a search key (user key + max sequence number),
+// which sorts BEFORE every real version of that user key — so searchIndex can
+// return -1 for a key that still lives in block 0.
 //
 // ------------------------------------------------------------
 // Footer Format (last 20 bytes of file):
@@ -165,12 +162,17 @@ func readFooterWithBloom(r io.ReadSeeker) (indexOffset int64, numEntries uint32,
 	return
 }
 
+// searchIndex takes an encoded internal key and returns the last block whose
+// first key sorts at or before it.
 func searchIndex(index []IndexEntry, key []byte) int {
+	target := base.DecodeInternalKey(key)
+
 	lo, hi := 0, len(index)-1
 	result := -1
 	for lo <= hi {
 		mid := (lo + hi) / 2
-		if bytes.Compare(index[mid].FirstKey, key) <= 0 {
+		firstKey := base.DecodeInternalKey(index[mid].FirstKey)
+		if base.InternalCompare(bytes.Compare, firstKey, target) <= 0 {
 			result = mid
 			lo = mid + 1
 		} else {

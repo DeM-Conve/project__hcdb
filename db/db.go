@@ -7,6 +7,7 @@ import (
 	"github.com/hchauhan7816/hcdb/cache"
 	"github.com/hchauhan7816/hcdb/compaction"
 	"github.com/hchauhan7816/hcdb/config"
+	"github.com/hchauhan7816/hcdb/internal/base"
 	"github.com/hchauhan7816/hcdb/memtable"
 	"github.com/hchauhan7816/hcdb/sstable"
 	"github.com/hchauhan7816/hcdb/wal"
@@ -22,7 +23,7 @@ func Open(conf config.Config) (*DB, error) {
 		return nil, err
 	}
 
-	mem, err := rebuildMemtable(walObj)
+	mem, walMaxSeq, err := rebuildMemtable(walObj)
 	if err != nil {
 		return nil, err
 	}
@@ -40,18 +41,34 @@ func Open(conf config.Config) (*DB, error) {
 		sst.SetCache(blockCache)
 	}
 
-	return &DB{wal: walObj, memtable: mem, sstables: tables, conf: conf, blockCache: blockCache}, nil
-}
-
-func rebuildMemtable(walObj *wal.WAL) (*memtable.MemTable, error) {
-	mem := memtable.NewMemTable()
-
-	entries, err := walObj.Replay()
+	sstMaxSeq, err := maxSeqNumInTables(tables)
 	if err != nil {
 		return nil, err
 	}
 
+	db := &DB{wal: walObj, memtable: mem, sstables: tables, conf: conf, blockCache: blockCache}
+	db.seqNum.Store(max(uint64(walMaxSeq), uint64(sstMaxSeq)))
+
+	return db, nil
+}
+
+func rebuildMemtable(walObj *wal.WAL) (*memtable.MemTable, base.SeqNum, error) {
+	mem := memtable.NewMemTable()
+
+	entries, err := walObj.Replay()
+	if err != nil {
+		return nil, 0, err
+	}
+
+	var maxSeq base.SeqNum
+
 	for _, e := range entries {
+		// e.Key is already an encoded internal key, so replay preserves the
+		// original sequence numbers rather than assigning new ones.
+		if seq := base.DecodeInternalKey(e.Key).SeqNum(); seq > maxSeq {
+			maxSeq = seq
+		}
+
 		switch e.Type {
 		case config.OP_DELETE:
 			mem.Delete(e.Key)
@@ -60,7 +77,31 @@ func rebuildMemtable(walObj *wal.WAL) (*memtable.MemTable, error) {
 		}
 	}
 
-	return mem, nil
+	return mem, maxSeq, nil
+}
+
+// maxSeqNumInTables scans every SSTable to recover the highest sequence number
+// written. Needed because the WAL is truncated after a flush, so on restart it
+// no longer holds the sequence numbers already persisted in SSTables.
+//
+// NOTE: this is a full O(data) read on open. A manifest recording the last
+// sequence number (as LevelDB does) would make it O(1).
+func maxSeqNumInTables(tables []*sstable.SSTable) (base.SeqNum, error) {
+	var maxSeq base.SeqNum
+
+	for _, sst := range tables {
+		it, err := sstable.NewBlockIterator(sst)
+		if err != nil {
+			return 0, err
+		}
+		for _, e := range it.Entries {
+			if seq := base.DecodeInternalKey(e.Key).SeqNum(); seq > maxSeq {
+				maxSeq = seq
+			}
+		}
+	}
+
+	return maxSeq, nil
 }
 
 func (db *DB) searchSSTables(key []byte) ([]byte, bool) {

@@ -5,6 +5,7 @@ import (
 	"container/heap"
 
 	"github.com/hchauhan7816/hcdb/config"
+	"github.com/hchauhan7816/hcdb/internal/base"
 	"github.com/hchauhan7816/hcdb/memtable"
 	"github.com/hchauhan7816/hcdb/sstable"
 )
@@ -29,8 +30,16 @@ type mergeHeap []*mergeItem
 
 func (h mergeHeap) Len() int { return len(h) }
 
+// Less orders by internal key: user key ascending, then sequence number
+// descending, so the newest version of a key pops first. priority only breaks
+// ties between identical internal keys, which happens when the same write is
+// present in both a replayed memtable and an already-flushed SSTable.
 func (h mergeHeap) Less(i, j int) bool {
-	c := bytes.Compare(h[i].key, h[j].key)
+	c := base.InternalCompare(
+		bytes.Compare,
+		base.DecodeInternalKey(h[i].key),
+		base.DecodeInternalKey(h[j].key),
+	)
 	if c != 0 {
 		return c < 0
 	}
@@ -91,10 +100,12 @@ func (db *DB) Scan(lowerBound, upperBound []byte) (*MergeIterator, error) {
 func (m *MergeIterator) Next() bool {
 	for m.h.Len() > 0 {
 		top := heap.Pop(&m.h).(*mergeItem)
-		key := top.key
+		userKey := base.DecodeInternalKey(top.key).UserKey
 
-		// duplicate keys from older sources: advance and discard, don't emit
-		for m.h.Len() > 0 && bytes.Equal(m.h[0].key, key) {
+		// Older versions of the same user key, and duplicates from other
+		// sources: advance past them without emitting. The newest version
+		// popped first, so everything else here is superseded.
+		for m.h.Len() > 0 && bytes.Equal(base.DecodeInternalKey(m.h[0].key).UserKey, userKey) {
 			dup := heap.Pop(&m.h).(*mergeItem)
 			dup.src.Next()
 			if dup.src.Valid() {
@@ -108,7 +119,7 @@ func (m *MergeIterator) Next() bool {
 			heap.Push(&m.h, &mergeItem{key: top.src.Key(), priority: top.priority, src: top.src})
 		}
 
-		if m.upperBound != nil && bytes.Compare(key, m.upperBound) > 0 {
+		if m.upperBound != nil && bytes.Compare(userKey, m.upperBound) > 0 {
 			m.valid = false
 			return false
 		}
@@ -117,7 +128,7 @@ func (m *MergeIterator) Next() bool {
 			continue
 		}
 
-		m.key, m.val = key, val
+		m.key, m.val = userKey, val
 		m.valid = true
 		return true
 	}

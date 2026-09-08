@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/hchauhan7816/hcdb/internal/base"
 	"github.com/hchauhan7816/hcdb/sstable"
 )
 
@@ -23,15 +24,19 @@ func mergeGroup(tables []*sstable.SSTable, dirPath string) (*sstable.SSTable, er
 	return sstable.WriteSSTableFromBlockEntries(filePath, merged)
 }
 
-// mergeIterators does a k-way merge — newest SSTable wins on duplicate keys
-// tables[0] is newest (front of slice), so it wins ties
+// mergeIterators does a k-way merge — newest version wins on duplicate user
+// keys. tables[0] is newest (front of slice) and entries within a table are
+// sorted newest-first, so the first occurrence of a user key is the newest.
+//
+// NOTE: this drops older versions, which is why snapshots cannot yet see
+// through a compaction.
 func mergeIterators(iterators []*sstable.BlockIterator) []sstable.BlockEntry {
 	seen := make(map[string]bool)
 	var result []sstable.BlockEntry
 
 	for _, it := range iterators {
 		for _, entry := range it.Entries {
-			key := string(entry.Key)
+			key := string(base.DecodeInternalKey(entry.Key).UserKey)
 			if seen[key] {
 				continue
 			}
