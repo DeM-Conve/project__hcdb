@@ -2,7 +2,7 @@
 
 Package: `sstable/` — files: `sstable_types.go`, `sstable.go`, `block.go`, `index.go`,
 `writer.go`, `write_from_entries.go`, `write_block_collector.go`, `reader.go`,
-`block_iterator.go`, `sort_entries.go`
+`block_iterator.go`, `sort_entries.go`, `atomic_install.go`, `iterator.go`
 
 ## Why it exists
 
@@ -123,6 +123,9 @@ Both do the same sequence:
    entry. **This must stay in sync with `encodeIndex` byte-for-byte** or every read breaks.
 7. `encodeFooterWithBloom`, `writer.Flush()`, `file.Sync()` — the fsync is what makes the
    SSTable durable, which is what allows the WAL to be truncated afterwards.
+8. `atomicInstall(tmpPath, finalPath)` (`atomic_install.go`) — both writers actually write to
+   `<finalPath>.tmp` first (not directly to `<finalPath>`), then this renames it into place. See
+   *Atomic install* below.
 
 ### `blockCollector` (`write_block_collector.go`)
 
@@ -147,6 +150,31 @@ and is what goes into the `IndexEntry`. `drain` returns the entries and resets a
 
 > Naming note: `lastFirstKey` means "first key of the block being collected", and it must be
 > read *before* `drain()` clears it. Both writers do this correctly.
+
+### Atomic install (`atomic_install.go`)
+
+```go
+func atomicInstall(tmpPath, finalPath string) error {
+    os.Rename(tmpPath, finalPath)                    // atomic at the filesystem level
+    dir, _ := os.Open(filepath.Dir(finalPath))
+    defer dir.Close()
+    return dir.Sync()                                 // fsync the directory entry itself
+}
+```
+
+Before this existed, both writers wrote directly to `<UnixNano>.sst` — a crash mid-write left a
+corrupt, partially-written file at the path a reader would trust. Now they write to
+`<finalPath>.tmp`, `fsync` the file's contents, then rename. `os.Rename` is atomic, so there is
+no observable state where `finalPath` exists but is incomplete: either the `.tmp` file is still
+there (crash before rename) or the complete file is at `finalPath` (crash after). Both `Flush`
+and `WriteSSTableFromBlockEntries` also `defer` an `os.Remove(tmpPath)` on any error return, so a
+failed write doesn't leave an orphaned `.tmp` file behind.
+
+The directory `fsync` covers a subtler gap: `rename()` returning success only means the new
+directory entry hit the kernel's page cache, not disk — a crash before *that* is flushed can
+still lose the rename despite the syscall having already returned successfully. See
+[faultinjection.md](faultinjection.md) for the crash-window test this enabled
+(`db.TestCrashBetweenFlushAndWALReset`).
 
 ### Ordering requirement
 
@@ -225,15 +253,29 @@ key order. Used only by compaction. It's a full materialisation, not a streaming
 despite the name, it loads the entire table into memory at once. That's the dominant memory
 cost of compaction.
 
+### `Iterator` (`iterator.go`) — one source in the range-scan merge
+
+Unlike `BlockIterator` above (which materializes a whole table for compaction), `Iterator` is
+the **lazy**, streaming per-SSTable cursor used by `db.Scan`'s k-way merge
+(see [db.md](db.md)). `NewIterator(sst, lowerBound)` binary-searches `sst.index` the same way
+`Lookup` does to find the starting block, then walks forward — decoding one block at a time via
+`readBlock` (which transparently benefits from the block cache, see [cache.md](cache.md)) — and
+crossing into the next block only once the current one is exhausted. It never loads more than
+one decoded block into memory at a time, which is the point: an SSTable can be far larger than
+RAM, so a range scan can't afford `BlockIterator`'s eager whole-table load.
+
 ## Known limitations
 
 - **A file handle is opened and closed per block read.** `readBlock` calls `os.Open` on every
-  single lookup that gets past the bloom filter. No handle cache, no mmap. This is the largest
-  avoidable cost in the read path.
-- **No block cache.** The same hot block is re-read and re-decoded from the OS page cache on
-  every access.
+  lookup that misses the block cache. No handle cache, no mmap. The block cache
+  ([cache.md](cache.md)) now absorbs most of this cost for repeated access to the same block, but
+  a cold miss still pays it.
 - **`BlockIterator` loads whole tables into RAM**, so compaction memory scales with the size of
-  the group being merged.
+  the group being merged. `sstable.Iterator` (used by range scans) does not have this problem —
+  the two exist for different reasons and aren't interchangeable.
+- **The block cache is unbounded across concurrent scans.** `Iterator` doesn't pin blocks it has
+  read — if a compaction deletes the underlying file mid-scan, a subsequent `readBlock` call on
+  that iterator will fail. No reference counting exists yet (see [db.md](db.md)).
 - **`indexSize` duplicates `encodeIndex`'s layout knowledge.** Any change to the index encoding
   must be mirrored in both or every file becomes unreadable.
 - **`encodeFooter` / `readFooter` are dead code** (the pre-bloom 12-byte footer).
@@ -244,4 +286,8 @@ cost of compaction.
 - [bloomfilter.md](bloomfilter.md) — the pre-read filter
 - [compaction.md](compaction.md) — how SSTables get merged and deleted
 - [memtable.md](memtable.md) — the source of a flushed table
-- [config.md](config.md) — `DEFAULT_BLOCK_SIZE`, `DEFAULT_BLOOM_EXPECTED_KEYS`
+- [cache.md](cache.md) — what `readBlock` checks before hitting disk
+- [faultinjection.md](faultinjection.md) — why atomic install exists, and what tests it
+- [db.md](db.md) — `Scan`'s k-way merge, which drives `sstable.Iterator`
+- [config.md](config.md) — `DEFAULT_BLOCK_SIZE`, `DEFAULT_BLOOM_EXPECTED_KEYS`,
+  `DEFAULT_BLOCK_CACHE_ENTRIES`

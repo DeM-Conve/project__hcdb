@@ -1,6 +1,6 @@
 # MemTable
 
-Package: `memtable/` — files: `memtable_types.go`, `memtable.go`
+Package: `memtable/` — files: `memtable_types.go`, `memtable.go`, `iterator.go`
 
 ## Why it exists
 
@@ -136,6 +136,23 @@ Two consumers:
 `Ascend` holds the **read** lock for its entire duration. `sstable.Flush` runs inside it, so a
 flush blocks all writers until the file is fully written and `fsync`'d.
 
+### `Iterator` (`iterator.go`) — one source in the range-scan merge
+
+```go
+func NewIterator(mt *MemTable, lowerBound, upperBound []byte) *Iterator
+```
+
+Unlike `sstable.Iterator` (see [sstable.md](sstable.md)), this one is **eager**, not lazy: it
+calls `mt.tree.AscendGreaterOrEqual(pivot, ...)` once, up front, and copies every matching
+`Item` into a plain `[]Item` slice, stopping the moment it passes `upperBound`. `Next()` then
+just walks that slice with a position index. This is safe specifically because the memtable is
+already bounded, in-memory data — there's no disk cost to defer the way there is for an
+SSTable's blocks, so eagerly snapshotting the range is simpler and just as cheap.
+
+Exists purely to satisfy `db`'s `source` interface (`Valid`/`Key`/`Value`/`Type`/`Next`) so
+`db.Scan`'s k-way merge can treat the memtable and every SSTable identically — see
+[db.md](db.md) for the merge itself.
+
 ## Lifecycle
 
 ```
@@ -159,5 +176,5 @@ handoff and no background flush — flush is synchronous and blocking.
 
 - [wal.md](wal.md) — durability; what refills the memtable on restart
 - [sstable.md](sstable.md) — where `Ascend` output goes
-- [db.md](db.md) — flush trigger and read ordering
+- [db.md](db.md) — flush trigger, read ordering, and `Scan`'s use of `Iterator`
 - [config.md](config.md) — `DEFAULT_BTREE_DEGREE`, `DEFAULT_MEMTABLE_FLUSH_SIZE`

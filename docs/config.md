@@ -137,6 +137,16 @@ block read that finds nothing. Dropping to 0.001 costs ~50% more bits for 10× f
 is the main weakness — small tables waste memory, tables above 100 000 keys silently exceed the
 1% target rate.
 
+## Cache
+
+```go
+DEFAULT_BLOCK_CACHE_ENTRIES = 256
+```
+
+Number of decoded blocks the shared `cache.LRU` holds (see [cache.md](cache.md)) — entries, not
+bytes. At `DEFAULT_BLOCK_SIZE` (4 KB) that's roughly 1 MB of decoded blocks. An unvalidated
+starting guess, not tuned against a real hit-rate measurement yet.
+
 ## `Config` struct
 
 ```go
@@ -170,8 +180,9 @@ callers dereference at the call site.
 | `DEFAULT_SIMILAR_SIZE_RATIO` | 2 | compaction | size-tier width |
 | `DEFAULT_BLOOM_FALSE_POSITIVE_RATE` | 0.01 | bloomfilter | filter accuracy vs. size |
 | `DEFAULT_BLOOM_EXPECTED_KEYS` | 100 000 | bloomfilter | filter sizing per SSTable |
+| `DEFAULT_BLOCK_CACHE_ENTRIES` | 256 | cache | shared decoded-block cache size |
 
 ## Related
 
 - [db.md](db.md) · [wal.md](wal.md) · [memtable.md](memtable.md) · [sstable.md](sstable.md) ·
-  [compaction.md](compaction.md) · [bloomfilter.md](bloomfilter.md)
+  [compaction.md](compaction.md) · [bloomfilter.md](bloomfilter.md) · [cache.md](cache.md)

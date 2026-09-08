@@ -140,10 +140,14 @@ for _, sst := range tables {
 }
 ```
 
-Deletion happens **after** every merged output has been written and `fsync`'d (the fsync is
-inside `WriteSSTableFromBlockEntries`). Order matters: new file durable first, old files removed
-second. A crash between the two leaves duplicate data — extra disk usage, but reads stay correct
-because the newer file sorts first by name. A crash in the other order would lose data.
+Deletion happens **after** every merged output has been written, fsync'd, and atomically
+installed (`WriteSSTableFromBlockEntries` now writes to a `.tmp` file and renames it into place —
+see [sstable.md](sstable.md#atomic-install-atomic_installgo)). Order matters: new file durable
+first, old files removed second. A crash between the two leaves duplicate data — extra disk
+usage, but reads stay correct because the newer file sorts first by name. A crash in the other
+order would lose data. The atomic install means a crash *during* the write of the new file can no
+longer leave a corrupt, half-written file at the final path — only that specific failure mode is
+fixed by it, not the ordering argument above.
 
 ## Full flow
 
@@ -178,8 +182,12 @@ flushMemtable
 - **Tombstones are never reclaimed**, so deleted data occupies disk forever.
 - **No manifest.** Recency is inferred from filenames and slice position. A manifest recording
   levels/generations would fix the ordering bug and enable safe tombstone dropping.
-- **Partial failure isn't atomic.** An error mid-way returns `nil`, having possibly already
-  written some merged files, leaving orphans behind.
+- **Partial failure across groups isn't atomic.** An error mid-way returns `nil`, having possibly
+  already written and installed some merged output files from earlier groups in the loop, with no
+  rollback. Note this is narrower than it used to be: a failure *within* one file's write no
+  longer orphans a corrupt `.tmp` file (both writer functions now clean that up on error — see
+  [sstable.md](sstable.md#atomic-install-atomic_installgo)) — the remaining gap is specifically
+  about already-completed files from prior groups when a later group fails.
 
 ## Related
 

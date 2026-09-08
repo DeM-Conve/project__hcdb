@@ -1,6 +1,6 @@
 # DB — the orchestration layer
 
-Package: `db/` — files: `db_types.go`, `db.go`, `db_operations.go`
+Package: `db/` — files: `types.go`, `db.go`, `operations.go`, `iterator.go`, `db_test.go`
 
 ## Why it exists
 
@@ -15,11 +15,12 @@ the others exist. `db` wires them into an LSM tree and owns the two rules that m
 
 ```go
 type DB struct {
-    mu       sync.RWMutex
-    wal      *wal.WAL
-    memtable *memtable.MemTable
-    sstables []*sstable.SSTable   // INVARIANT: newest first
-    conf     config.Config
+    mu         sync.RWMutex
+    wal        *wal.WAL
+    memtable   *memtable.MemTable
+    sstables   []*sstable.SSTable   // INVARIANT: newest first
+    conf       config.Config
+    blockCache *cache.LRU
 }
 ```
 
@@ -34,7 +35,12 @@ os.MkdirAll(conf.SSTDir, 0755)
 walObj, _ := wal.Open(conf.WALPath)
 mem, _   := rebuildMemtable(walObj)      // replay the log
 tables,_ := sstable.OpenAllInDir(conf.SSTDir)
-return &DB{wal, mem, tables, conf}
+
+blockCache := cache.NewLRU(config.DEFAULT_BLOCK_CACHE_ENTRIES)
+for _, sst := range tables {
+    sst.SetCache(blockCache)
+}
+return &DB{wal, mem, tables, conf, blockCache}
 ```
 
 `rebuildMemtable` calls `walObj.Replay()` and applies each entry by type:
@@ -114,15 +120,25 @@ I/O at all.
 ```go
 db.mu.Lock(); defer db.mu.Unlock()
 
-sst, err := sstable.Flush(db.memtable, db.conf.SSTDir)   // writes + fsyncs the file
+sst, err := sstable.Flush(db.memtable, db.conf.SSTDir)   // writes, fsyncs, atomically installs
+sst.SetCache(db.blockCache)
 db.sstables = append([]*sstable.SSTable{sst}, db.sstables...)   // PREPEND — newest first
 db.memtable = memtable.NewMemTable()
 
 db.resetWAL()                                            // log is now redundant
 
 compacted, err := compaction.Compact(db.sstables, db.conf.SSTDir)
+for _, sst := range compacted {
+    sst.SetCache(db.blockCache)
+}
 db.sstables = compacted
 ```
+
+`sstable.Flush` itself now writes to a temp file and installs it atomically (rename + directory
+fsync) rather than writing directly to the final path — see [sstable.md](sstable.md#atomic-install-atomic_installgo)
+and [faultinjection.md](faultinjection.md). Every SSTable that enters `db.sstables`, from either
+`Open` or `flushMemtable`, gets `SetCache(db.blockCache)` called on it — the cache is one shared
+instance for the whole `DB`, not one per SSTable (see [cache.md](cache.md)).
 
 The ordering here is the crash-safety argument:
 
@@ -133,7 +149,12 @@ The ordering here is the crash-safety argument:
 
 A crash between steps 1 and 3 leaves both an SSTable and a WAL containing the same data —
 harmless, since replay just re-applies writes that are already on disk, and the replayed
-memtable shadows the identical SSTable values.
+memtable shadows the identical SSTable values. `TestCrashBetweenFlushAndWALReset` (`db_test.go`)
+proves this directly: it calls `sstable.Flush` on its own, deliberately skips `resetWAL()`, then
+reopens a fresh `DB` over the same paths to simulate a restart, and asserts both that reads are
+still correct *and* that the redundancy (data in both the replayed memtable and the installed
+SSTable) is real, not just assumed. See [faultinjection.md](faultinjection.md) for the full
+reasoning chain that led here.
 
 `ForceFlush()` is a public wrapper over `flushMemtable` for tests and benchmarks.
 
@@ -143,6 +164,67 @@ db.wal.File.Truncate(0)
 db.wal.File.Seek(0, 0)
 db.wal.BufWriter.Reset(db.wal.File)   // drop buffered bytes that would survive the truncate
 ```
+
+## `Scan(lowerBound, upperBound)` (`iterator.go`)
+
+Range scans across the memtable and every SSTable, merged in sorted order, newest-wins on
+duplicate keys, tombstones hidden. This is the k-way merge the earlier "No iterators" limitation
+used to name as missing.
+
+### `source` interface
+
+```go
+type source interface {
+    Valid() bool
+    Key() []byte
+    Value() []byte
+    Type() uint8
+    Next()
+}
+```
+
+`*memtable.Iterator` and `*sstable.Iterator` both satisfy this — structurally, with no
+`implements` declaration anywhere — so the merge logic below treats "the memtable" and "an
+SSTable" identically. See [memtable.md](memtable.md) and [sstable.md](sstable.md) for how each
+one actually walks its data (eager snapshot vs. lazy block-at-a-time).
+
+### The merge: a min-heap over sources
+
+```go
+type mergeItem struct {
+    key      []byte
+    priority int   // lower = newer; wins ties on duplicate keys
+    src      source
+}
+
+type mergeHeap []*mergeItem   // implements container/heap.Interface: Len, Less, Swap, Push, Pop
+```
+
+`Scan` builds one iterator per source, pushes each onto the heap (skipping any source with
+nothing in range), and returns a `*MergeIterator`. `priority` is `0` for the memtable (always
+freshest) and `i+1` for `db.sstables[i]` — which is already newest-first, so this directly reuses
+the same ordering invariant the rest of `db` depends on.
+
+`Next()`, each call:
+
+1. `heap.Pop` — the smallest key across every source.
+2. **Duplicate-key handling**: while the new heap root has the *same* key, pop and discard it
+   too, advancing that (older, by the `priority` tie-break in `Less`) source past the key without
+   emitting it. This is what implements newest-wins.
+3. Read the winner's value/type, advance its source, re-push if it still has more.
+4. If the key is past `upperBound`, stop.
+5. If the entry is a tombstone (`config.OP_DELETE`), skip it — loop back to step 1 instead of
+   returning.
+6. Otherwise, save it as the current position and return `true`.
+
+### Concurrency gap
+
+`Scan` takes `db.mu.RLock()` only long enough to build the initial heap, then releases it —
+`Next()` calls happen with no lock held at all. Each `sstable.Iterator` holds a `FilePath` and
+re-`os.Open`s it per block. If `compaction.Compact` runs concurrently and deletes an SSTable a
+scan is still iterating, that scan's next block read will fail. Real engines solve this with
+reference counting so a file isn't deleted while an iterator still holds it open; hcdb does not
+yet.
 
 ## `Close` / `PrintMemTable`
 
@@ -198,10 +280,11 @@ Single-writer usage is safe. Multi-writer is not.
 - **Recency ordering is positional, not recorded.** `db.sstables` order is maintained by
   prepending, but `compaction.Compact` can return a slice whose order no longer reflects
   recency (see [compaction.md](compaction.md)). There is no manifest to recover the true order.
-- **No iterators / range scans** on `DB` — the components support ordered iteration, but it
-  isn't exposed.
+- **`Scan` isn't concurrency-safe against compaction** — see the Concurrency gap under `Scan`
+  above. Correct for single-threaded use, not for a scan running alongside a flush.
 
 ## Related
 
 - [wal.md](wal.md) · [memtable.md](memtable.md) · [sstable.md](sstable.md) ·
-  [compaction.md](compaction.md) · [bloomfilter.md](bloomfilter.md) · [config.md](config.md)
+  [compaction.md](compaction.md) · [bloomfilter.md](bloomfilter.md) · [cache.md](cache.md) ·
+  [faultinjection.md](faultinjection.md) · [config.md](config.md)
