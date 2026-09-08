@@ -1,6 +1,9 @@
 package cache
 
-import "container/list"
+import (
+	"container/list"
+	"sync"
+)
 
 type entry struct {
 	key   string
@@ -8,6 +11,7 @@ type entry struct {
 }
 
 type LRU struct {
+	mu       sync.RWMutex
 	capacity int
 	ll       *list.List
 	items    map[string]*list.Element
@@ -22,6 +26,9 @@ func NewLRU(capacity int) *LRU {
 }
 
 func (c *LRU) insert(key string, value any) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	if elem, ok := c.items[key]; ok {
 		elem.Value.(*entry).value = value
 		c.ll.MoveToFront(elem)

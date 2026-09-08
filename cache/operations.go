@@ -1,6 +1,9 @@
 package cache
 
 func (c *LRU) Get(key string) (any, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	elem, ok := c.items[key]
 	if !ok {
 		return nil, false
@@ -15,5 +18,8 @@ func (c *LRU) Put(key string, value any) {
 }
 
 func (c *LRU) Len() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
 	return c.ll.Len()
 }
