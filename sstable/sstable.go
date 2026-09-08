@@ -2,6 +2,7 @@ package sstable
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"os"
 
@@ -40,6 +41,14 @@ func (sst *SSTable) Get(key []byte) ([]byte, bool, error) {
 }
 
 func (sst *SSTable) readBlock(idx IndexEntry) ([]BlockEntry, error) {
+	cacheKey := fmt.Sprintf("%s:%d", sst.FilePath, idx.Offset)
+
+	if sst.cache != nil {
+		if cached, ok := sst.cache.Get(cacheKey); ok {
+			return cached.([]BlockEntry), nil
+		}
+	}
+
 	file, err := os.Open(sst.FilePath)
 	if err != nil {
 		return nil, err
@@ -55,7 +64,16 @@ func (sst *SSTable) readBlock(idx IndexEntry) ([]BlockEntry, error) {
 		return nil, err
 	}
 
-	return decodeBlock(blockBytes)
+	entries, err := decodeBlock(blockBytes)
+	if err != nil {
+		return nil, err
+	}
+
+	if sst.cache != nil {
+		sst.cache.Put(cacheKey, entries)
+	}
+
+	return entries, nil
 }
 
 func findInBlockLookup(entries []BlockEntry, key []byte) ([]byte, KEY_LOOKUP_ENUM, error) {

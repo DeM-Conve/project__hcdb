@@ -4,7 +4,7 @@ import "container/list"
 
 type entry struct {
 	key   string
-	value []byte
+	value any
 }
 
 type LRU struct {
@@ -21,7 +21,7 @@ func NewLRU(capacity int) *LRU {
 	}
 }
 
-func (c *LRU) insert(key string, value []byte) {
+func (c *LRU) insert(key string, value any) {
 	if elem, ok := c.items[key]; ok {
 		elem.Value.(*entry).value = value
 		c.ll.MoveToFront(elem)

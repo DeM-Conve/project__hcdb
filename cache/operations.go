@@ -1,6 +1,6 @@
 package cache
 
-func (c *LRU) Get(key string) ([]byte, bool) {
+func (c *LRU) Get(key string) (any, bool) {
 	elem, ok := c.items[key]
 	if !ok {
 		return nil, false
@@ -10,7 +10,7 @@ func (c *LRU) Get(key string) ([]byte, bool) {
 	return elem.Value.(*entry).value, true
 }
 
-func (c *LRU) Put(key string, value []byte) {
+func (c *LRU) Put(key string, value any) {
 	c.insert(key, value)
 }
 

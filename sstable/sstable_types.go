@@ -1,6 +1,9 @@
 package sstable
 
-import "github.com/hchauhan7816/hcdb/bloomfilter"
+import (
+	"github.com/hchauhan7816/hcdb/bloomfilter"
+	"github.com/hchauhan7816/hcdb/cache"
+)
 
 type KEY_LOOKUP_ENUM uint8
 
@@ -26,4 +29,11 @@ type SSTable struct {
 	FilePath string
 	index    []IndexEntry
 	bloom    *bloomfilter.BloomFilter // loaded from disk on Open
+	cache    *cache.LRU               // shared block cache, set via SetCache
+}
+
+// SetCache attaches the shared block cache used by readBlock. Called once
+// by the DB layer after the SSTable is opened or created.
+func (sst *SSTable) SetCache(c *cache.LRU) {
+	sst.cache = c
 }

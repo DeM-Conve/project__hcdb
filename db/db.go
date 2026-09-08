@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/hchauhan7816/hcdb/cache"
 	"github.com/hchauhan7816/hcdb/compaction"
 	"github.com/hchauhan7816/hcdb/config"
 	"github.com/hchauhan7816/hcdb/memtable"
@@ -31,7 +32,12 @@ func Open(conf config.Config) (*DB, error) {
 		return nil, err
 	}
 
-	return &DB{wal: walObj, memtable: mem, sstables: tables, conf: conf}, nil
+	blockCache := cache.NewLRU(config.DEFAULT_BLOCK_CACHE_ENTRIES)
+	for _, sst := range tables {
+		sst.SetCache(blockCache)
+	}
+
+	return &DB{wal: walObj, memtable: mem, sstables: tables, conf: conf, blockCache: blockCache}, nil
 }
 
 func rebuildMemtable(walObj *wal.WAL) (*memtable.MemTable, error) {
@@ -82,6 +88,7 @@ func (db *DB) flushMemtable() error {
 	if err != nil {
 		return err
 	}
+	sst.SetCache(db.blockCache)
 
 	db.sstables = append([]*sstable.SSTable{sst}, db.sstables...)
 	db.memtable = memtable.NewMemTable()
@@ -93,6 +100,9 @@ func (db *DB) flushMemtable() error {
 	compacted, err := compaction.Compact(db.sstables, db.conf.SSTDir)
 	if err != nil {
 		return err
+	}
+	for _, sst := range compacted {
+		sst.SetCache(db.blockCache)
 	}
 	db.sstables = compacted
 

@@ -3,6 +3,7 @@ package db
 import (
 	"sync"
 
+	"github.com/hchauhan7816/hcdb/cache"
 	"github.com/hchauhan7816/hcdb/config"
 	"github.com/hchauhan7816/hcdb/memtable"
 	"github.com/hchauhan7816/hcdb/sstable"
@@ -10,9 +11,10 @@ import (
 )
 
 type DB struct {
-	mu       sync.RWMutex
-	wal      *wal.WAL
-	memtable *memtable.MemTable
-	sstables []*sstable.SSTable
-	conf     config.Config
+	mu         sync.RWMutex
+	wal        *wal.WAL
+	memtable   *memtable.MemTable
+	sstables   []*sstable.SSTable
+	conf       config.Config
+	blockCache *cache.LRU
 }
