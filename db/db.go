@@ -120,13 +120,19 @@ func (db *DB) searchSSTables(key []byte) ([]byte, bool) {
 }
 
 func (db *DB) ForceFlush() error {
-	return db.flushMemtable()
-}
-
-func (db *DB) flushMemtable() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
+	return db.flushMemtableLocked()
+}
+
+// flushMemtableLocked writes the memtable out as an SSTable, resets the WAL and
+// runs compaction.
+//
+// The caller must already hold db.mu for writing. It cannot take the lock
+// itself: Put calls this while holding db.mu, and Go mutexes are not
+// reentrant, so locking here would deadlock instantly.
+func (db *DB) flushMemtableLocked() error {
 	sst, err := sstable.Flush(db.memtable, db.conf.SSTDir)
 	if err != nil {
 		return err
@@ -164,10 +170,16 @@ func (db *DB) resetWAL() error {
 }
 
 func (db *DB) Close() error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
 	return db.wal.Sync()
 }
 
 func (db *DB) PrintMemTable() {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
 	fmt.Println("\n--- Memtable (sorted keys) ---")
 
 	db.memtable.Ascend(func(key, value []byte) bool {

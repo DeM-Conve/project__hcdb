@@ -72,8 +72,14 @@ The WAL write comes first and its error short-circuits, so the memtable can neve
 write that isn't in the log. If it were the other way round, a crash between the two steps would
 lose an acknowledged write.
 
-`Put` takes **no lock** — it relies on the memtable's and (implicitly) the WAL's internal
-synchronisation. `flushMemtable` takes `db.mu.Lock()` itself.
+`Put` validates the key and value against `config.MAX_KEY_LENGTH` / `MAX_VALUE_LENGTH` before
+anything else. The WAL enforces those limits again on `Replay`, where an over-long record is
+read as corruption and the log is truncated there — so accepting an oversized write would
+return `nil` to the caller and then silently discard that record *and every record after it*
+on the next restart.
+
+`Put` then holds `db.mu.Lock()` for the rest of the call, including the flush it may trigger —
+see [Concurrency](#concurrency).
 
 ## `Delete(key)`
 
@@ -82,7 +88,9 @@ if err := db.wal.Delete(key); err != nil { return err }
 db.memtable.Delete([]byte(key))
 ```
 
-Same ordering. Writes a tombstone in both places. **No flush-size check** — see limitations.
+Same ordering. Writes a tombstone in both places, then runs the same flush-size check as `Put` —
+tombstones are ordinary memtable entries under MVCC, so a delete-only workload has to be able to
+cross the threshold.
 
 ## `Get(key)`
 
@@ -262,22 +270,43 @@ Get(k)  ──► MemTable ──miss──► sst[0] ──► sst[1] ──►
 
 ## Concurrency
 
-- `db.mu` is an `RWMutex`. `Get` takes the read lock; `flushMemtable` takes the write lock.
-- `Put` and `Delete` take **no** `db.mu` lock at all. They mutate the WAL (which has no internal
-  locking) and the memtable (which does have its own `RWMutex`).
-- So: concurrent readers are fine, and readers vs. flush is correctly serialised, but
-  **concurrent writers race on the WAL** — `putCounter` and the shared `bufio.Writer` are
-  unprotected. Interleaved `Append` calls can produce a corrupt log.
-- `Put` can also call `flushMemtable`, which takes the write lock, while the caller holds
-  nothing — so two simultaneous writers can both decide to flush.
+`db.mu` is an `RWMutex` guarding every entry point:
 
-Single-writer usage is safe. Multi-writer is not.
+| caller | lock |
+|---|---|
+| `Get`, `Scan`, `PrintMemTable` | `RLock` |
+| `Put`, `Delete`, `ForceFlush`, `Close` | `Lock` |
+
+Writers take the **write** lock, not the read lock, for two reasons: the WAL's `bufio.Writer`
+and `putCounter` have no internal locking of their own, and the sequence number has to reach
+the log in assignment order. Unsynchronised writers interleave mid-record and corrupt the file
+on disk — `go test -race` reported 13 distinct races on four concurrent `Put`s before this was
+locked.
+
+Because `Put` holds `db.mu` and may need to flush, the flush path is split in two:
+
+```go
+func (db *DB) ForceFlush() error {
+    db.mu.Lock(); defer db.mu.Unlock()
+    return db.flushMemtableLocked()
+}
+
+// caller must already hold db.mu for writing
+func (db *DB) flushMemtableLocked() error { ... }
+```
+
+`flushMemtableLocked` must not take the lock itself. Go mutexes are **not reentrant**, so a
+`Put` that already holds `db.mu` and then calls a function which locks it again deadlocks
+immediately. This is the same shape as `cache.evictOldest`, which is called under `insert`'s
+lock for the same reason.
+
+Regression test: `TestConcurrentWriters` in `operations_test.go` (run with `-race`).
+
+Still not safe: a `Scan` iterator outlives the `RLock` taken to build it — see the Concurrency
+gap above.
 
 ## Known limitations
 
-- **`Delete` never triggers a flush.** Only `Put` checks `Size()`. A delete-heavy workload grows
-  the memtable and WAL without bound.
-- **Writes aren't locked** — see Concurrency above.
 - **Flush and compaction are synchronous**, holding the write lock. All reads and writes stall
   for the duration of a file write plus a possible multi-table merge.
 - **No immutable memtable / no background flush.**
