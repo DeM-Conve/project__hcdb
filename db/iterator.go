@@ -99,24 +99,17 @@ func (db *DB) Scan(lowerBound, upperBound []byte) (*MergeIterator, error) {
 func (m *MergeIterator) Next() bool {
 	for m.h.Len() > 0 {
 		top := heap.Pop(&m.h).(*mergeItem)
-		userKey := base.DecodeInternalKey(top.key).UserKey
+		ik := base.DecodeInternalKey(top.key)
+		userKey, kind := ik.UserKey, ik.Kind()
+		val := top.src.Value() // read before advancing the source
 
-		// Older versions of the same user key, and duplicates from other
-		// sources: advance past them without emitting. The newest version
-		// popped first, so everything else here is superseded.
+		// Every remaining entry for this user key is an older version that the
+		// one just popped supersedes — skip them all. That includes further
+		// versions inside top's own source, not just duplicates in other
+		// sources, since one source can hold many versions of a key.
+		skipPast(userKey, top, &m.h)
 		for m.h.Len() > 0 && bytes.Equal(base.DecodeInternalKey(m.h[0].key).UserKey, userKey) {
-			dup := heap.Pop(&m.h).(*mergeItem)
-			dup.src.Next()
-			if dup.src.Valid() {
-				heap.Push(&m.h, &mergeItem{key: dup.src.Key(), priority: dup.priority, src: dup.src})
-			}
-		}
-
-		val := top.src.Value()
-		kind := base.DecodeInternalKey(top.key).Kind()
-		top.src.Next()
-		if top.src.Valid() {
-			heap.Push(&m.h, &mergeItem{key: top.src.Key(), priority: top.priority, src: top.src})
+			skipPast(userKey, heap.Pop(&m.h).(*mergeItem), &m.h)
 		}
 
 		if m.upperBound != nil && bytes.Compare(userKey, m.upperBound) > 0 {
@@ -140,3 +133,16 @@ func (m *MergeIterator) Next() bool {
 func (m *MergeIterator) Key() []byte   { return m.key }
 func (m *MergeIterator) Value() []byte { return m.val }
 func (m *MergeIterator) Valid() bool   { return m.valid }
+
+// skipPast advances item's source beyond every entry for userKey, then puts
+// the source back on the heap if it still has data.
+func skipPast(userKey []byte, item *mergeItem, h *mergeHeap) {
+	for item.src.Next(); item.src.Valid(); item.src.Next() {
+		if !bytes.Equal(base.DecodeInternalKey(item.src.Key()).UserKey, userKey) {
+			break
+		}
+	}
+	if item.src.Valid() {
+		heap.Push(h, &mergeItem{key: item.src.Key(), priority: item.priority, src: item.src})
+	}
+}
