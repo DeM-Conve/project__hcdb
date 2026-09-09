@@ -4,19 +4,18 @@ import (
 	"bytes"
 	"container/heap"
 
-	"github.com/hchauhan7816/hcdb/config"
 	"github.com/hchauhan7816/hcdb/internal/base"
 	"github.com/hchauhan7816/hcdb/memtable"
 	"github.com/hchauhan7816/hcdb/sstable"
 )
 
-// source is anything the merging iterator can pull sorted entries from —
-// the memtable and each SSTable all implement this identically.
+// source is anything the merging iterator can pull sorted entries from — the
+// memtable and each SSTable all implement this identically. Keys are encoded
+// internal keys, so the kind comes from the key rather than a separate field.
 type source interface {
 	Valid() bool
 	Key() []byte
 	Value() []byte
-	Type() uint8
 	Next()
 }
 
@@ -113,7 +112,8 @@ func (m *MergeIterator) Next() bool {
 			}
 		}
 
-		val, typ := top.src.Value(), top.src.Type()
+		val := top.src.Value()
+		kind := base.DecodeInternalKey(top.key).Kind()
 		top.src.Next()
 		if top.src.Valid() {
 			heap.Push(&m.h, &mergeItem{key: top.src.Key(), priority: top.priority, src: top.src})
@@ -124,7 +124,7 @@ func (m *MergeIterator) Next() bool {
 			return false
 		}
 
-		if typ == config.OP_DELETE {
+		if kind == base.InternalKeyKindDelete {
 			continue
 		}
 

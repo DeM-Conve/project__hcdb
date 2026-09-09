@@ -14,9 +14,8 @@ const (
 )
 
 type BlockEntry struct {
-	Key   []byte // encoded internal key: user key + 8-byte trailer
+	Key   []byte // encoded internal key; its trailer carries the kind
 	Value []byte
-	Type  uint8
 }
 
 type IndexEntry struct {

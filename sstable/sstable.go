@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 
-	"github.com/hchauhan7816/hcdb/config"
 	"github.com/hchauhan7816/hcdb/internal/base"
 )
 
@@ -94,8 +93,9 @@ func (sst *SSTable) readBlock(idx IndexEntry) ([]BlockEntry, error) {
 // Entries are sorted newest-first within a user key, so the first match wins.
 func findInBlockLookup(entries []BlockEntry, userKey []byte) ([]byte, KEY_LOOKUP_ENUM, error) {
 	for _, e := range entries {
-		if bytes.Equal(base.DecodeInternalKey(e.Key).UserKey, userKey) {
-			if e.Type == config.OP_DELETE {
+		ik := base.DecodeInternalKey(e.Key)
+		if bytes.Equal(ik.UserKey, userKey) {
+			if ik.Kind() == base.InternalKeyKindDelete {
 				return nil, KEY_DELETED, nil
 			}
 			return e.Value, KEY_FOUND, nil

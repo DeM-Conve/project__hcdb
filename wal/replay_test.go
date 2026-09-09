@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/hchauhan7816/hcdb/config"
 	"github.com/hchauhan7816/hcdb/faultinjection"
 )
 
@@ -33,7 +32,7 @@ func TestTornWriteRecovery(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		key := []byte("good-key-" + string(rune('0'+i)))
 		value := []byte("good-value")
-		entry := Entry{Type: config.OP_PUT, Key: key, Value: value}
+		entry := Entry{Key: key, Value: value}
 		if err := walObj.Append(entry); err != nil {
 			t.Fatalf("append good entry %d: %v", i, err)
 		}
@@ -42,7 +41,7 @@ func TestTornWriteRecovery(t *testing.T) {
 		t.Fatalf("flush good entries: %v", err)
 	}
 
-	tornEntry := Entry{Type: config.OP_PUT, Key: []byte("torn-key-x"), Value: []byte("torn-value")}
+	tornEntry := Entry{Key: []byte("torn-key-x"), Value: []byte("torn-value")}
 	if err := walObj.Append(tornEntry); err != nil {
 		t.Fatalf("append torn entry: %v", err)
 	}
@@ -76,7 +75,10 @@ func TestTornWriteRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat: %v", err)
 	}
-	if info.Size() != 111 {
-		t.Fatalf("expected file truncated to 111 bytes, got %d", info.Size())
+	// 3 clean records survive. Each is totalLen(4) + keyLen(4) + valLen(4) +
+	// key(10) + value(10) + crc32(4) = 36 bytes.
+	const wantSize = 3 * 36
+	if info.Size() != wantSize {
+		t.Fatalf("expected file truncated to %d bytes, got %d", wantSize, info.Size())
 	}
 }

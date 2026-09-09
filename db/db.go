@@ -69,10 +69,9 @@ func rebuildMemtable(walObj *wal.WAL) (*memtable.MemTable, base.SeqNum, error) {
 			maxSeq = seq
 		}
 
-		switch e.Type {
-		case config.OP_DELETE:
+		if base.DecodeInternalKey(e.Key).Kind() == base.InternalKeyKindDelete {
 			mem.Delete(e.Key)
-		case config.OP_PUT:
+		} else {
 			mem.Put(e.Key, e.Value)
 		}
 	}
@@ -171,11 +170,12 @@ func (db *DB) Close() error {
 func (db *DB) PrintMemTable() {
 	fmt.Println("\n--- Memtable (sorted keys) ---")
 
-	db.memtable.Ascend(func(key, value []byte, itemType uint8) bool {
-		if itemType == config.OP_DELETE {
-			fmt.Printf("%s => [tombstone]\n", key)
+	db.memtable.Ascend(func(key, value []byte) bool {
+		ik := base.DecodeInternalKey(key)
+		if ik.Kind() == base.InternalKeyKindDelete {
+			fmt.Printf("%s@%d => [tombstone]\n", ik.UserKey, ik.SeqNum())
 		} else {
-			fmt.Printf("%s => %s\n", key, value)
+			fmt.Printf("%s@%d => %s\n", ik.UserKey, ik.SeqNum(), value)
 		}
 		return true
 	})

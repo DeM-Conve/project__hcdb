@@ -1,9 +1,6 @@
 package config
 
 const (
-	OP_PUT    = uint8(0)
-	OP_DELETE = uint8(1)
-
 	MAX_KEY_LENGTH   = 1024
 	MAX_VALUE_LENGTH = 1048576
 

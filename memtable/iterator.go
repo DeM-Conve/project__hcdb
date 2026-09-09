@@ -42,5 +42,4 @@ func NewIterator(mt *MemTable, lowerBound, upperBound []byte) *Iterator {
 func (it *Iterator) Valid() bool   { return it.pos < len(it.entries) }
 func (it *Iterator) Key() []byte   { return it.entries[it.pos].Key }
 func (it *Iterator) Value() []byte { return it.entries[it.pos].Value }
-func (it *Iterator) Type() uint8   { return it.entries[it.pos].Type }
 func (it *Iterator) Next()         { it.pos++ }

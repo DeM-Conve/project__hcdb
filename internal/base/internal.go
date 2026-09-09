@@ -62,8 +62,8 @@ const SeqNumMax SeqNum = 1<<56 - 1
 type InternalKeyKind uint8
 
 // These constants are part of the file format, and should not be changed.
-// NOTE: these follow Pebble's values, which are the inverse of hcdb's
-// config.OP_PUT / config.OP_DELETE.
+// They are the only place put/delete is recorded — no struct carries a
+// separate type field.
 const (
 	InternalKeyKindDelete InternalKeyKind = 0
 	InternalKeyKindSet    InternalKeyKind = 1
@@ -94,8 +94,8 @@ func (t InternalKeyTrailer) Kind() InternalKeyKind {
 	return InternalKeyKind(t & 0xff)
 }
 
-// InternalKey is a key used for the in-memory and on-disk partial DBs that
-// make up a pebble DB.
+// InternalKey is the key used everywhere data is stored — memtable, WAL and
+// SSTables all hold these rather than raw user keys.
 type InternalKey struct {
 	UserKey []byte
 	Trailer InternalKeyTrailer

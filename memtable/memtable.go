@@ -27,10 +27,20 @@ func NewMemTable() *MemTable {
 // Put inserts an already-encoded internal key. Each sequence number produces a
 // distinct key, so versions accumulate instead of replacing each other.
 func (memTable *MemTable) Put(internalKey []byte, value []byte) {
+	memTable.insert(internalKey, value)
+}
+
+// Delete inserts a tombstone. The key's trailer already marks it as a delete,
+// so this differs from Put only in carrying no value.
+func (memTable *MemTable) Delete(internalKey []byte) {
+	memTable.insert(internalKey, nil)
+}
+
+func (memTable *MemTable) insert(internalKey []byte, value []byte) {
 	memTable.mut.Lock()
 	defer memTable.mut.Unlock()
 
-	newItem := Item{Key: internalKey, Value: value, Type: config.OP_PUT}
+	newItem := Item{Key: internalKey, Value: value}
 
 	memTable.tree.ReplaceOrInsert(newItem)
 	memTable.size += (len(newItem.Key) + len(newItem.Value))
@@ -56,21 +66,11 @@ func (memTable *MemTable) Get(userKey []byte) ([]byte, bool) {
 	if found == nil {
 		return nil, false
 	}
-	if found.Type == config.OP_DELETE {
+	if base.DecodeInternalKey(found.Key).Kind() == base.InternalKeyKindDelete {
 		return nil, false // tombstone
 	}
 
 	return found.Value, true
-}
-
-func (memTable *MemTable) Delete(internalKey []byte) {
-	memTable.mut.Lock()
-	defer memTable.mut.Unlock()
-
-	tombstone := Item{Key: internalKey, Value: nil, Type: config.OP_DELETE}
-
-	memTable.tree.ReplaceOrInsert(tombstone)
-	memTable.size += len(tombstone.Key)
 }
 
 func (memTable *MemTable) Size() int {
@@ -81,14 +81,15 @@ func (memTable *MemTable) Size() int {
 }
 
 // Ascend walks entries in internal-key order, so keys arrive with their
-// trailers intact and versions of one user key arrive newest-first.
-func (memTable *MemTable) Ascend(fn func(key, value []byte, itemType uint8) bool) {
+// trailers intact (kind included) and versions of one user key arrive
+// newest-first.
+func (memTable *MemTable) Ascend(fn func(key, value []byte) bool) {
 	memTable.mut.RLock()
 	defer memTable.mut.RUnlock()
 
 	memTable.tree.Ascend(func(i btree.Item) bool {
 		item := i.(Item)
-		return fn(item.Key, item.Value, item.Type)
+		return fn(item.Key, item.Value)
 	})
 }
 

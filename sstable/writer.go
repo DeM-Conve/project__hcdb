@@ -84,10 +84,10 @@ func Flush(memTable *memtable.MemTable, dirPath string) (sst *SSTable, err error
 	var currentOffset int64
 
 	var iterErr error
-	memTable.Ascend(func(key, value []byte, itemType uint8) bool {
+	memTable.Ascend(func(key, value []byte) bool {
 		// key is an internal key; the bloom filter is probed with user keys
 		bloom.Add(base.DecodeInternalKey(key).UserKey)
-		blockCollector.add(BlockEntry{Key: key, Value: value, Type: itemType})
+		blockCollector.add(BlockEntry{Key: key, Value: value})
 
 		if blockCollector.size() >= config.DEFAULT_BLOCK_SIZE {
 			lastFirstKey := blockCollector.lastFirstKey
