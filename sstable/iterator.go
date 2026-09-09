@@ -7,22 +7,27 @@ import (
 )
 
 // Iterator walks an SSTable's entries in internal-key order, starting from
-// the first key >= lowerBound (a user key). It is one "source" in a k-way
-// merge, and the keys it yields are encoded internal keys.
+// the first key >= lowerBound (a user key) that is visible at the snapshot. It
+// is one "source" in a k-way merge, and the keys it yields are encoded
+// internal keys.
 type Iterator struct {
 	sst      *SSTable
+	snapshot base.SeqNum
 	blockIdx int
 	entries  []BlockEntry
 	pos      int
 	valid    bool
 }
 
-func NewIterator(sst *SSTable, lowerBound []byte) (*Iterator, error) {
-	it := &Iterator{sst: sst}
+// NewIterator seeks to the first entry at or after lowerBound that is visible
+// at snapshot. Pass base.SeqNumMax to see every version.
+func NewIterator(sst *SSTable, lowerBound []byte, snapshot base.SeqNum) (*Iterator, error) {
+	it := &Iterator{sst: sst, snapshot: snapshot}
 
-	seekKey := base.DecodeInternalKey(EncodeSearchKey(lowerBound))
+	encodedSeek := EncodeSearchKeyAt(lowerBound, snapshot)
+	seekKey := base.DecodeInternalKey(encodedSeek)
 
-	it.blockIdx = searchIndex(sst.index, EncodeSearchKey(lowerBound))
+	it.blockIdx = searchIndex(sst.index, encodedSeek)
 	if it.blockIdx < 0 {
 		it.blockIdx = 0 // lowerBound is before the first block's first key
 	}
@@ -41,7 +46,21 @@ func NewIterator(sst *SSTable, lowerBound []byte) (*Iterator, error) {
 		}
 	}
 
+	it.skipInvisible()
 	return it, nil
+}
+
+// skipInvisible advances past any entry written after the snapshot.
+//
+// The seek key already positions the first landing correctly, but walking
+// forward crosses into other user keys whose newest versions may well be too
+// new — so every step has to re-check, not just the first.
+func (it *Iterator) skipInvisible() {
+	for it.valid && !base.DecodeInternalKey(it.entries[it.pos].Key).Visible(it.snapshot) {
+		if !it.advance() {
+			return
+		}
+	}
 }
 
 func (it *Iterator) loadBlock() error {
@@ -80,4 +99,8 @@ func (it *Iterator) advance() bool {
 func (it *Iterator) Valid() bool   { return it.valid }
 func (it *Iterator) Key() []byte   { return it.entries[it.pos].Key }
 func (it *Iterator) Value() []byte { return it.entries[it.pos].Value }
-func (it *Iterator) Next()         { it.advance() }
+func (it *Iterator) Next() {
+	if it.advance() {
+		it.skipInvisible()
+	}
+}

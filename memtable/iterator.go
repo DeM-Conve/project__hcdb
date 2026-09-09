@@ -13,24 +13,35 @@ import (
 // disk-read cost to defer.
 //
 // Bounds are user keys; the entries it yields carry encoded internal keys.
+// Versions newer than the snapshot are dropped while collecting, so a consumer
+// never sees them.
 type Iterator struct {
 	entries []Item
 	pos     int
 }
 
-func NewIterator(mt *MemTable, lowerBound, upperBound []byte) *Iterator {
+// NewIterator collects entries in [lowerBound, upperBound] that are visible at
+// snapshot. Pass base.SeqNumMax to see every version.
+//
+// Unlike a point lookup, the snapshot cannot be folded into the seek key here:
+// the scan crosses many user keys, and each one needs its own version filtered
+// independently. So invisible versions are skipped one at a time instead.
+func NewIterator(mt *MemTable, lowerBound, upperBound []byte, snapshot base.SeqNum) *Iterator {
 	mt.mut.RLock()
 	defer mt.mut.RUnlock()
 
 	it := &Iterator{}
-	pivot := Item{Key: encodeSearchKey(lowerBound)}
+	pivot := Item{Key: encodeSearchKey(lowerBound, snapshot)}
 
 	mt.tree.AscendGreaterOrEqual(pivot, func(i btree.Item) bool {
 		item := i.(Item)
-		userKey := base.DecodeInternalKey(item.Key).UserKey
+		ik := base.DecodeInternalKey(item.Key)
 
-		if upperBound != nil && bytes.Compare(userKey, upperBound) > 0 {
+		if upperBound != nil && bytes.Compare(ik.UserKey, upperBound) > 0 {
 			return false
+		}
+		if !ik.Visible(snapshot) {
+			return true // too new for this reader — skip, keep scanning
 		}
 		it.entries = append(it.entries, item)
 		return true

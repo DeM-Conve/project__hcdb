@@ -103,9 +103,9 @@ func maxSeqNumInTables(tables []*sstable.SSTable) (base.SeqNum, error) {
 	return maxSeq, nil
 }
 
-func (db *DB) searchSSTables(key []byte) ([]byte, bool) {
+func (db *DB) searchSSTables(key []byte, snapshot base.SeqNum) ([]byte, bool) {
 	for _, sst := range db.sstables {
-		val, st, err := sst.Lookup(key)
+		val, st, err := sst.Lookup(key, snapshot)
 		if err != nil {
 			return nil, false
 		}

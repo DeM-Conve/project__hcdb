@@ -84,3 +84,58 @@ func TestDecodeShortKeyIsInvalid(t *testing.T) {
 		t.Fatalf("a key shorter than the trailer must decode as invalid")
 	}
 }
+
+// versions of "b" at seq 1..5, plus neighbours, sorted as stored
+func TestSearchKeyAtLandsOnNewestVisible(t *testing.T) {
+	var keys []InternalKey
+	keys = append(keys, MakeInternalKey([]byte("a"), 9, InternalKeyKindSet))
+	for s := SeqNum(1); s <= 5; s++ {
+		keys = append(keys, MakeInternalKey([]byte("b"), s, InternalKeyKindSet))
+	}
+	keys = append(keys, MakeInternalKey([]byte("c"), 9, InternalKeyKindSet))
+	sort.Slice(keys, func(i, j int) bool {
+		return InternalCompare(bytes.Compare, keys[i], keys[j]) < 0
+	})
+
+	for snap := SeqNum(0); snap <= 6; snap++ {
+		target := MakeSearchKeyAt([]byte("b"), snap)
+		idx := sort.Search(len(keys), func(i int) bool {
+			return InternalCompare(bytes.Compare, keys[i], target) >= 0
+		})
+		got := "none"
+		if idx < len(keys) && string(keys[idx].UserKey) == "b" {
+			got = string(rune('0' + keys[idx].SeqNum()))
+		}
+		want := "none"
+		if snap >= 1 {
+			w := snap
+			if w > 5 {
+				w = 5
+			}
+			want = string(rune('0' + w))
+		}
+		if got != want {
+			t.Errorf("snapshot %d: landed on b@%s, want b@%s", snap, got, want)
+		} else {
+			t.Logf("snapshot %d → b@%s", snap, got)
+		}
+	}
+}
+
+// a Set written exactly at the snapshot seqnum must be visible (inclusive bound)
+func TestSearchKeyAtIsInclusive(t *testing.T) {
+	set := MakeInternalKey([]byte("k"), 7, InternalKeyKindSet)
+	del := MakeInternalKey([]byte("k"), 7, InternalKeyKindDelete)
+	target := MakeSearchKeyAt([]byte("k"), 7)
+	if c := InternalCompare(bytes.Compare, set, target); c < 0 {
+		t.Errorf("Set@7 sorts BEFORE search key at snapshot 7 (c=%d) — would be skipped", c)
+	}
+	if c := InternalCompare(bytes.Compare, del, target); c < 0 {
+		t.Errorf("Delete@7 sorts BEFORE search key at snapshot 7 (c=%d) — would be skipped", c)
+	}
+	// and a version above the snapshot must be skipped
+	above := MakeInternalKey([]byte("k"), 8, InternalKeyKindSet)
+	if c := InternalCompare(bytes.Compare, above, target); c >= 0 {
+		t.Errorf("Set@8 sorts at/after search key at snapshot 7 (c=%d) — would be wrongly visible", c)
+	}
+}

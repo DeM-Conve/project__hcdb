@@ -46,20 +46,23 @@ func (memTable *MemTable) insert(internalKey []byte, value []byte) {
 	memTable.size += (len(newItem.Key) + len(newItem.Value))
 }
 
-// Get returns the newest version of userKey in this memtable.
+// Get returns the newest version of userKey visible at snapshot. Pass
+// base.SeqNumMax to read the latest write.
 //
 // The result is three-valued because "not here" and "deleted here" must not
 // look alike to the caller: a tombstone has to stop the search, or db.Get
 // falls through to the SSTables and resurrects the value it was hiding.
-func (memTable *MemTable) Get(userKey []byte) ([]byte, base.KEY_LOOKUP_ENUM) {
+//
+// No version filtering happens here. The search key is built at the snapshot,
+// so it already sorts after every version too new to see — the walk cannot
+// land on one.
+func (memTable *MemTable) Get(userKey []byte, snapshot base.SeqNum) ([]byte, base.KEY_LOOKUP_ENUM) {
 	memTable.mut.RLock()
 	defer memTable.mut.RUnlock()
 
 	var found *Item
 
-	// The search key sorts before every real version of userKey, so the first
-	// entry the walk lands on is the newest version.
-	memTable.tree.AscendGreaterOrEqual(Item{Key: encodeSearchKey(userKey)}, func(i btree.Item) bool {
+	memTable.tree.AscendGreaterOrEqual(Item{Key: encodeSearchKey(userKey, snapshot)}, func(i btree.Item) bool {
 		item := i.(Item)
 		if !bytes.Equal(base.DecodeInternalKey(item.Key).UserKey, userKey) {
 			return false // walked past this user key entirely
@@ -98,8 +101,8 @@ func (memTable *MemTable) Ascend(fn func(key, value []byte) bool) {
 	})
 }
 
-func encodeSearchKey(userKey []byte) []byte {
-	k := base.MakeSearchKey(userKey)
+func encodeSearchKey(userKey []byte, snapshot base.SeqNum) []byte {
+	k := base.MakeSearchKeyAt(userKey, snapshot)
 	buf := make([]byte, k.Size())
 	k.Encode(buf)
 	return buf

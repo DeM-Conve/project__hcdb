@@ -17,23 +17,48 @@ var (
 	ErrValueTooLong = fmt.Errorf("value exceeds %d bytes", config.MAX_VALUE_LENGTH)
 )
 
-// Get returns the newest live value for key, searching newest level first:
-// memtable, then SSTables in newest-to-oldest order.
+// GetSnapshot returns a snapshot of the database as it stands right now.
+//
+// A snapshot is just the current sequence number. Every write already carries
+// a strictly increasing one, so "the state at sequence S" is fully described
+// by S alone — there is nothing to copy, allocate or release. Reads taken at S
+// are unaffected by anything written afterwards.
+//
+// NOTE: a snapshot is not yet protected from compaction, which drops
+// superseded versions without consulting any reader. Holding one across a
+// flush can therefore lose the version it was meant to see. Making that safe
+// is the job of the GC boundary (curriculum step 7).
+func (db *DB) GetSnapshot() base.SeqNum {
+	return base.SeqNum(db.seqNum.Load())
+}
+
+// Get returns the newest live value for key.
+func (db *DB) Get(key string) ([]byte, bool) {
+	return db.GetAt(key, base.SeqNumMax)
+}
+
+// GetAt returns the newest value for key that was written at or before
+// snapshot, searching newest level first: memtable, then SSTables in
+// newest-to-oldest order.
 //
 // A tombstone in any level ends the search. Without that, a delete recorded in
 // the memtable would be skipped over and an older SSTable copy returned.
-func (db *DB) Get(key string) ([]byte, bool) {
+//
+// Reading at base.SeqNumMax is exactly reading the latest state, so Get is
+// just this function with a snapshot that can see everything — the two share
+// one implementation rather than diverging.
+func (db *DB) GetAt(key string, snapshot base.SeqNum) ([]byte, bool) {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 
-	switch val, st := db.memtable.Get([]byte(key)); st {
+	switch val, st := db.memtable.Get([]byte(key), snapshot); st {
 	case base.KEY_FOUND:
 		return val, true
 	case base.KEY_DELETED:
 		return nil, false
 	}
 
-	return db.searchSSTables([]byte(key))
+	return db.searchSSTables([]byte(key), snapshot)
 }
 
 // Put writes key/value at the next sequence number.

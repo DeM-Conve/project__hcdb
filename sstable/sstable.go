@@ -21,13 +21,13 @@ import (
 // key: when a user key happens to be a block's first key, searchIndex points
 // at the PREVIOUS block. Iterator walks forward across blocks and lands
 // correctly; the same applies when one user key's versions span two blocks.
-func (sst *SSTable) Lookup(userKey []byte) ([]byte, base.KEY_LOOKUP_ENUM, error) {
+func (sst *SSTable) Lookup(userKey []byte, snapshot base.SeqNum) ([]byte, base.KEY_LOOKUP_ENUM, error) {
 	// bloom says definitely not here — skip disk entirely
 	if !sst.bloom.MightContain(userKey) {
 		return nil, base.KEY_ABSENT, nil
 	}
 
-	it, err := NewIterator(sst, userKey)
+	it, err := NewIterator(sst, userKey, snapshot)
 	if err != nil {
 		return nil, base.KEY_ABSENT, err
 	}
@@ -43,17 +43,6 @@ func (sst *SSTable) Lookup(userKey []byte) ([]byte, base.KEY_LOOKUP_ENUM, error)
 		return nil, base.KEY_DELETED, nil
 	}
 	return it.Value(), base.KEY_FOUND, nil
-}
-
-func (sst *SSTable) Get(key []byte) ([]byte, bool, error) {
-	val, st, err := sst.Lookup(key)
-	if err != nil {
-		return nil, false, err
-	}
-	if st != base.KEY_FOUND {
-		return nil, false, nil
-	}
-	return val, true, nil
 }
 
 func (sst *SSTable) readBlock(idx IndexEntry) ([]BlockEntry, error) {
@@ -90,6 +79,15 @@ func (sst *SSTable) readBlock(idx IndexEntry) ([]BlockEntry, error) {
 	}
 
 	return entries, nil
+}
+
+// EncodeSearchKeyAt builds the encoded internal key used to seek to the newest
+// version of userKey visible at snapshot.
+func EncodeSearchKeyAt(userKey []byte, snapshot base.SeqNum) []byte {
+	k := base.MakeSearchKeyAt(userKey, snapshot)
+	buf := make([]byte, k.Size())
+	k.Encode(buf)
+	return buf
 }
 
 // EncodeSearchKey builds the encoded internal key used to seek to the newest

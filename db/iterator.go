@@ -71,18 +71,28 @@ type MergeIterator struct {
 // Scan returns an iterator over [lowerBound, upperBound] across the
 // memtable and all SSTables, merged in sorted order.
 func (db *DB) Scan(lowerBound, upperBound []byte) (*MergeIterator, error) {
+	return db.ScanAt(lowerBound, upperBound, base.SeqNumMax)
+}
+
+// ScanAt is Scan restricted to versions visible at snapshot.
+//
+// The filtering happens inside each source iterator rather than here: a source
+// never yields a version newer than the snapshot, so by the time entries reach
+// the heap the newest one for a user key is already the newest *visible* one,
+// and the merge logic needs no snapshot awareness at all.
+func (db *DB) ScanAt(lowerBound, upperBound []byte, snapshot base.SeqNum) (*MergeIterator, error) {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 
 	m := &MergeIterator{upperBound: upperBound}
 
-	memIt := memtable.NewIterator(db.memtable, lowerBound, upperBound)
+	memIt := memtable.NewIterator(db.memtable, lowerBound, upperBound, snapshot)
 	if memIt.Valid() {
 		heap.Push(&m.h, &mergeItem{key: memIt.Key(), priority: 0, src: memIt})
 	}
 
 	for i, sst := range db.sstables {
-		sstIt, err := sstable.NewIterator(sst, lowerBound)
+		sstIt, err := sstable.NewIterator(sst, lowerBound, snapshot)
 		if err != nil {
 			return nil, err
 		}

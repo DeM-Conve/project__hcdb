@@ -113,12 +113,30 @@ func MakeInternalKey(userKey []byte, seqNum SeqNum, kind InternalKeyKind) Intern
 	}
 }
 
-// MakeSearchKey constructs an internal key that is appropriate for searching
-// for a the specified user key. The search key contain the maximal sequence
-// number and kind ensuring that it sorts before any other internal keys for
-// the same user key.
+// MakeSearchKey constructs an internal key appropriate for searching for the
+// specified user key. The search key contains the maximal sequence number and
+// kind, ensuring that it sorts before any other internal key for the same user
+// key — so a seek lands on the newest version that exists.
 func MakeSearchKey(userKey []byte) InternalKey {
-	return MakeInternalKey(userKey, SeqNumMax, InternalKeyKindMax)
+	return MakeSearchKeyAt(userKey, SeqNumMax)
+}
+
+// MakeSearchKeyAt constructs a search key that sorts before every version of
+// userKey that is visible at snapshot, and after every version that is not.
+// A seek to it therefore lands directly on the newest visible version, with no
+// filtering needed afterwards.
+//
+// This works because trailers sort descending: a version with a sequence
+// number above the snapshot has a larger trailer and so sorts BEFORE the
+// search key, while a visible one sorts at or after it. InternalKeyKindMax as
+// the kind makes the boundary inclusive — a Set written exactly at the
+// snapshot's own sequence number produces an equal trailer, and
+// Visible(snapshot) is defined as seqNum <= snapshot.
+//
+// MakeSearchKey is the SeqNumMax case of this: a snapshot that can see
+// everything.
+func MakeSearchKeyAt(userKey []byte, snapshot SeqNum) InternalKey {
+	return MakeInternalKey(userKey, snapshot, InternalKeyKindMax)
 }
 
 // DecodeInternalKey decodes an encoded internal key. See InternalKey.Encode().
