@@ -46,7 +46,12 @@ func (memTable *MemTable) insert(internalKey []byte, value []byte) {
 	memTable.size += (len(newItem.Key) + len(newItem.Value))
 }
 
-func (memTable *MemTable) Get(userKey []byte) ([]byte, bool) {
+// Get returns the newest version of userKey in this memtable.
+//
+// The result is three-valued because "not here" and "deleted here" must not
+// look alike to the caller: a tombstone has to stop the search, or db.Get
+// falls through to the SSTables and resurrects the value it was hiding.
+func (memTable *MemTable) Get(userKey []byte) ([]byte, base.KEY_LOOKUP_ENUM) {
 	memTable.mut.RLock()
 	defer memTable.mut.RUnlock()
 
@@ -64,13 +69,13 @@ func (memTable *MemTable) Get(userKey []byte) ([]byte, bool) {
 	})
 
 	if found == nil {
-		return nil, false
+		return nil, base.KEY_ABSENT
 	}
 	if base.DecodeInternalKey(found.Key).Kind() == base.InternalKeyKindDelete {
-		return nil, false // tombstone
+		return nil, base.KEY_DELETED
 	}
 
-	return found.Value, true
+	return found.Value, base.KEY_FOUND
 }
 
 func (memTable *MemTable) Size() int {

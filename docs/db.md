@@ -89,28 +89,34 @@ Same ordering. Writes a tombstone in both places. **No flush-size check** — se
 ```go
 db.mu.RLock(); defer db.mu.RUnlock()
 
-if val, ok := db.memtable.Get([]byte(key)); ok {
-    return val, true              // memtable is always the freshest
+switch val, st := db.memtable.Get([]byte(key)); st {
+case base.KEY_FOUND:   return val, true    // memtable is always the freshest
+case base.KEY_DELETED: return nil, false   // STOP — deleted
 }
-return db.searchSSTables([]byte(key))
+return db.searchSSTables([]byte(key))      // KEY_ABSENT → try the SSTables
 ```
 
 ### `searchSSTables`
 
 ```go
-for _, sst := range db.sstables {          // newest → oldest
+for _, sst := range db.sstables {        // newest → oldest
     val, st, err := sst.Lookup(key)
-    if err != nil                  { return nil, false }
-    if st == sstable.KEY_DELETED   { return nil, false }   // STOP — deleted
-    if st == sstable.KEY_FOUND     { return val, true }
+    if err != nil               { return nil, false }
+    if st == base.KEY_DELETED   { return nil, false }   // STOP — deleted
+    if st == base.KEY_FOUND     { return val, true }
     // KEY_ABSENT → keep going to the next, older table
 }
 return nil, false
 ```
 
-The `KEY_DELETED` early return is what makes deletes work across levels. Hitting a tombstone
-means the newest record for this key is a delete, so searching older tables would be wrong —
-they'd return the pre-delete value.
+Every level answers with the same three-valued `base.KEY_LOOKUP_ENUM`, and the `KEY_DELETED`
+early return at each one is what makes deletes work across levels. Hitting a tombstone means
+the newest record for this key is a delete, so searching older levels would be wrong — they'd
+return the pre-delete value.
+
+The memtable is a level like any other here. It used to answer with a plain `bool`, collapsing
+"absent" and "deleted" into one result, and `Get` fell through to `searchSSTables` for both —
+so a delete recorded in the memtable over an already-flushed value returned that value.
 
 Each `Lookup` checks that table's bloom filter first, so most of these iterations cost no disk
 I/O at all.

@@ -5,12 +5,20 @@ import (
 	"github.com/hchauhan7816/hcdb/internal/base"
 )
 
+// Get returns the newest live value for key, searching newest level first:
+// memtable, then SSTables in newest-to-oldest order.
+//
+// A tombstone in any level ends the search. Without that, a delete recorded in
+// the memtable would be skipped over and an older SSTable copy returned.
 func (db *DB) Get(key string) ([]byte, bool) {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 
-	if val, ok := db.memtable.Get([]byte(key)); ok {
+	switch val, st := db.memtable.Get([]byte(key)); st {
+	case base.KEY_FOUND:
 		return val, true
+	case base.KEY_DELETED:
+		return nil, false
 	}
 
 	return db.searchSSTables([]byte(key))

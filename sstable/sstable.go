@@ -12,7 +12,7 @@ import (
 // Lookup takes a user key and returns its newest version in this SSTable.
 //
 //	user key → bloom.MightContain()        (bloom indexes user keys)
-//	    ├─ no  → KEY_ABSENT                (zero disk I/O)
+//	    ├─ no  → base.KEY_ABSENT      (zero disk I/O)
 //	    └─ yes → seek an Iterator to the user key, which lands on its newest
 //	             version (or on the next user key if it is absent)
 //
@@ -21,28 +21,28 @@ import (
 // key: when a user key happens to be a block's first key, searchIndex points
 // at the PREVIOUS block. Iterator walks forward across blocks and lands
 // correctly; the same applies when one user key's versions span two blocks.
-func (sst *SSTable) Lookup(userKey []byte) ([]byte, KEY_LOOKUP_ENUM, error) {
+func (sst *SSTable) Lookup(userKey []byte) ([]byte, base.KEY_LOOKUP_ENUM, error) {
 	// bloom says definitely not here — skip disk entirely
 	if !sst.bloom.MightContain(userKey) {
-		return nil, KEY_ABSENT, nil
+		return nil, base.KEY_ABSENT, nil
 	}
 
 	it, err := NewIterator(sst, userKey)
 	if err != nil {
-		return nil, KEY_ABSENT, err
+		return nil, base.KEY_ABSENT, err
 	}
 	if !it.Valid() {
-		return nil, KEY_ABSENT, nil
+		return nil, base.KEY_ABSENT, nil
 	}
 
 	ik := base.DecodeInternalKey(it.Key())
 	if !bytes.Equal(ik.UserKey, userKey) {
-		return nil, KEY_ABSENT, nil
+		return nil, base.KEY_ABSENT, nil
 	}
 	if ik.Kind() == base.InternalKeyKindDelete {
-		return nil, KEY_DELETED, nil
+		return nil, base.KEY_DELETED, nil
 	}
-	return it.Value(), KEY_FOUND, nil
+	return it.Value(), base.KEY_FOUND, nil
 }
 
 func (sst *SSTable) Get(key []byte) ([]byte, bool, error) {
@@ -50,7 +50,7 @@ func (sst *SSTable) Get(key []byte) ([]byte, bool, error) {
 	if err != nil {
 		return nil, false, err
 	}
-	if st != KEY_FOUND {
+	if st != base.KEY_FOUND {
 		return nil, false, nil
 	}
 	return val, true, nil

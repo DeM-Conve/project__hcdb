@@ -212,7 +212,7 @@ key
                  └─ readBlock(offset, length) → decodeBlock → findInBlockLookup
 ```
 
-Returns a three-valued `KEY_LOOKUP_ENUM`:
+Returns a three-valued `base.KEY_LOOKUP_ENUM`, shared with the memtable:
 
 ```go
 KEY_ABSENT   // not in this table — caller should keep searching older tables

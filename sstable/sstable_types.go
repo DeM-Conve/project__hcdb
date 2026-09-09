@@ -5,14 +5,6 @@ import (
 	"github.com/hchauhan7816/hcdb/cache"
 )
 
-type KEY_LOOKUP_ENUM uint8
-
-const (
-	KEY_ABSENT KEY_LOOKUP_ENUM = iota
-	KEY_FOUND
-	KEY_DELETED
-)
-
 type BlockEntry struct {
 	Key   []byte // encoded internal key; its trailer carries the kind
 	Value []byte

@@ -109,10 +109,10 @@ func (db *DB) searchSSTables(key []byte) ([]byte, bool) {
 		if err != nil {
 			return nil, false
 		}
-		if st == sstable.KEY_DELETED {
+		if st == base.KEY_DELETED {
 			return nil, false
 		}
-		if st == sstable.KEY_FOUND {
+		if st == base.KEY_FOUND {
 			return val, true
 		}
 	}
