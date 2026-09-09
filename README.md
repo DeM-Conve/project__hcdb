@@ -323,7 +323,7 @@ success. See [docs/faultinjection.md](docs/faultinjection.md) for the crash-wind
 test this made possible.
 
 **A min-heap turns "merge N sorted things" into one small, reusable algorithm.**
-Range scans, external merge sort, and Pebble's own read path all solve the same
+Range scans, external merge sort, and every LSM engine's read path solve the same
 problem: repeatedly pull the smallest available item from N sources, advance that
 one source. `db.Scan`'s k-way merge is exactly that idea, applied to two source
 types — memtable and SSTable — that otherwise know nothing about each other. See
@@ -375,8 +375,8 @@ Confirmed via `BenchmarkMemtablePutParallel` (`bench/`, `b.RunParallel` across 2
 goroutines): parallel writes are *slower* than sequential (654.1 ns/op vs 575.1
 ns/op for the same op), not just non-improving — contention overhead (goroutines
 blocking/waking on the lock) outweighs any benefit, since the actual tree insert
-still only ever happens one goroutine at a time regardless of core count. Pebble
-avoids this with a lock-free skiplist (atomic CAS per node, arena-allocated) so
+still only ever happens one goroutine at a time regardless of core count. The
+standard answer is a lock-free skiplist (atomic CAS per node, arena-allocated) so
 concurrent writers make real progress instead of taking turns.
 
 **6. Synchronous flush blocks the writer**
