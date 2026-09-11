@@ -46,7 +46,14 @@ func Open(conf config.Config) (*DB, error) {
 		return nil, err
 	}
 
-	db := &DB{wal: walObj, memtable: mem, sstables: tables, conf: conf, blockCache: blockCache}
+	db := &DB{
+		wal:        walObj,
+		memtable:   mem,
+		sstables:   tables,
+		conf:       conf,
+		blockCache: blockCache,
+		watermark:  base.NewWatermark(),
+	}
 	db.seqNum.Store(max(uint64(walMaxSeq), uint64(sstMaxSeq)))
 
 	return db, nil
@@ -146,7 +153,7 @@ func (db *DB) flushMemtableLocked() error {
 		return err
 	}
 
-	compacted, err := compaction.Compact(db.sstables, db.conf.SSTDir)
+	compacted, err := compaction.Compact(db.sstables, db.conf.SSTDir, db.watermark.Floor())
 	if err != nil {
 		return err
 	}

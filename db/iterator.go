@@ -74,12 +74,9 @@ func (db *DB) Scan(lowerBound, upperBound []byte) (*MergeIterator, error) {
 	return db.ScanAt(lowerBound, upperBound, base.SeqNumMax)
 }
 
-// ScanAt is Scan restricted to versions visible at snapshot.
-//
-// The filtering happens inside each source iterator rather than here: a source
-// never yields a version newer than the snapshot, so by the time entries reach
-// the heap the newest one for a user key is already the newest *visible* one,
-// and the merge logic needs no snapshot awareness at all.
+// ScanAt is Scan restricted to versions visible at snapshot. Each source
+// iterator does its own filtering, so the merge logic here needs no snapshot
+// awareness at all.
 func (db *DB) ScanAt(lowerBound, upperBound []byte, snapshot base.SeqNum) (*MergeIterator, error) {
 	db.mu.RLock()
 	defer db.mu.RUnlock()

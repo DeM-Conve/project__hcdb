@@ -46,16 +46,9 @@ func (memTable *MemTable) insert(internalKey []byte, value []byte) {
 	memTable.size += (len(newItem.Key) + len(newItem.Value))
 }
 
-// Get returns the newest version of userKey visible at snapshot. Pass
-// base.SeqNumMax to read the latest write.
-//
-// The result is three-valued because "not here" and "deleted here" must not
-// look alike to the caller: a tombstone has to stop the search, or db.Get
-// falls through to the SSTables and resurrects the value it was hiding.
-//
-// No version filtering happens here. The search key is built at the snapshot,
-// so it already sorts after every version too new to see — the walk cannot
-// land on one.
+// Get returns the newest version of userKey visible at snapshot (pass
+// base.SeqNumMax for the latest write). Three-valued so a tombstone can stop
+// the search instead of looking like "not here" to the caller.
 func (memTable *MemTable) Get(userKey []byte, snapshot base.SeqNum) ([]byte, base.KEY_LOOKUP_ENUM) {
 	memTable.mut.RLock()
 	defer memTable.mut.RUnlock()

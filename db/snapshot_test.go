@@ -28,29 +28,20 @@ func collectAt(t *testing.T, database *DB, lo, hi []byte, snap base.SeqNum) []st
 	return out
 }
 
-// TestSnapshotIsolation is curriculum Feature 9 step 8: write the same key
-// three times, take a snapshot between two of the writes, and read at that
-// snapshot AFTER all the writes have landed.
 func TestSnapshotIsolation(t *testing.T) {
 	database := openTestDB(t, t.TempDir())
 	defer database.Close()
 
 	database.Put("k", "v1")
 	database.Put("k", "v2")
-	snap := database.GetSnapshot() // taken between write 2 and write 3
+	snap := database.GetSnapshot()
 	database.Put("k", "v3")
 
-	// the snapshot read must not see v3, even though it happened first in
-	// wall-clock terms and is already durable in the memtable
 	assertGetAt(t, database, "k", snap, "v2", true)
-	assertGet(t, database, "k", "v3", true) // a normal read still sees the newest
-
-	// a snapshot from before the key existed sees nothing
+	assertGet(t, database, "k", "v3", true)
 	assertGetAt(t, database, "k", 0, "", false)
 }
 
-// TestSnapshotSeesDeletesCorrectly: a tombstone is a version like any other,
-// so a snapshot taken before the delete must still see the value.
 func TestSnapshotSeesDeletesCorrectly(t *testing.T) {
 	database := openTestDB(t, t.TempDir())
 	defer database.Close()
@@ -64,16 +55,12 @@ func TestSnapshotSeesDeletesCorrectly(t *testing.T) {
 	assertGetAt(t, database, "k", afterDelete, "", false)
 	assertGet(t, database, "k", "", false)
 
-	// re-put after the delete: each snapshot still sees its own era
 	database.Put("k", "reborn")
 	assertGetAt(t, database, "k", beforeDelete, "alive", true)
 	assertGetAt(t, database, "k", afterDelete, "", false)
 	assertGet(t, database, "k", "reborn", true)
 }
 
-// TestSnapshotAcrossFlush is the half of step 8 that reaches disk: the
-// snapshot's version must still be readable once it lives in an SSTable
-// rather than the memtable.
 func TestSnapshotAcrossFlush(t *testing.T) {
 	database := openTestDB(t, t.TempDir())
 	defer database.Close()
@@ -86,14 +73,12 @@ func TestSnapshotAcrossFlush(t *testing.T) {
 		t.Fatalf("flush: %v", err)
 	}
 
-	// both versions are now in one SSTable, and the older one must win at snap
 	assertGetAt(t, database, "k", snap, "v1", true)
 	assertGet(t, database, "k", "v2", true)
 }
 
-// TestSnapshotSpansMemtableAndSSTable: the old version is on disk, the new one
-// is in the memtable. The snapshot has to skip the memtable's version and fall
-// through to the SSTable — the case a naive "memtable always wins" read breaks.
+// old version on disk, new version in the memtable — the snapshot has to
+// fall through to disk instead of the memtable winning by default.
 func TestSnapshotSpansMemtableAndSSTable(t *testing.T) {
 	database := openTestDB(t, t.TempDir())
 	defer database.Close()
@@ -103,14 +88,12 @@ func TestSnapshotSpansMemtableAndSSTable(t *testing.T) {
 	if err := database.ForceFlush(); err != nil {
 		t.Fatalf("flush: %v", err)
 	}
-	database.Put("k", "new") // memtable only
+	database.Put("k", "new")
 
 	assertGetAt(t, database, "k", snap, "old", true)
 	assertGet(t, database, "k", "new", true)
 }
 
-// TestScanAtSnapshot: range scans honour the snapshot too, including keys
-// created entirely after it.
 func TestScanAtSnapshot(t *testing.T) {
 	database := openTestDB(t, t.TempDir())
 	defer database.Close()
@@ -119,9 +102,9 @@ func TestScanAtSnapshot(t *testing.T) {
 	database.Put("b", "b1")
 	snap := database.GetSnapshot()
 
-	database.Put("b", "b2") // overwrite an existing key
-	database.Put("c", "c1") // a key that did not exist at snap
-	database.Delete("a")    // delete a key that did exist at snap
+	database.Put("b", "b2")
+	database.Put("c", "c1")
+	database.Delete("a")
 
 	got := collectAt(t, database, []byte("a"), []byte("z"), snap)
 	want := []string{"a=a1", "b=b1"}
@@ -144,8 +127,7 @@ func assertSlice(t *testing.T, what string, got, want []string) {
 	}
 }
 
-// TestScanAtSnapshotAfterFlush: the visibility filter must keep working once
-// versions are read back off disk, not just while they're in the memtable.
+// same as TestScanAtSnapshot but reads back off disk after a flush.
 func TestScanAtSnapshotAfterFlush(t *testing.T) {
 	database := openTestDB(t, t.TempDir())
 	defer database.Close()

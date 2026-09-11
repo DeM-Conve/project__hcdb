@@ -32,14 +32,10 @@ func assertGet(t *testing.T, database *DB, key, wantVal string, wantOK bool) {
 	}
 }
 
-// TestGetStopsAtTombstone covers the case that made a three-valued
-// memtable.Get necessary: a delete recorded in the memtable, sitting above a
-// value already flushed to an SSTable. While memtable.Get reported "absent"
-// and "deleted" identically, db.Get skipped the tombstone, searched the
-// SSTables, and returned the value the delete was meant to hide.
-//
-// The re-put at the end is the opposite direction: a fix that stopped on a
-// tombstone too eagerly would shadow the key forever.
+// TestGetStopsAtTombstone: a delete in the memtable over a value already
+// flushed to an SSTable must hide it. The re-put at the end checks the
+// opposite failure — stopping on a tombstone too eagerly and shadowing the
+// key forever.
 func TestGetStopsAtTombstone(t *testing.T) {
 	database := openTestDB(t, t.TempDir())
 	defer database.Close()

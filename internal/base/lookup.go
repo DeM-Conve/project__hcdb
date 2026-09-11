@@ -1,12 +1,9 @@
 package base
 
 // KEY_LOOKUP_ENUM is the result of a point lookup in one level of the LSM
-// tree — the memtable or a single SSTable.
-//
-// The three states must stay distinct all the way up to db.Get. Collapsing
-// KEY_DELETED into KEY_ABSENT makes a tombstone invisible to the caller, which
-// then keeps searching older levels and resurrects the value the tombstone was
-// there to hide.
+// tree — the memtable or a single SSTable. Must stay three-valued all the way
+// up to db.Get: collapsing KEY_DELETED into KEY_ABSENT lets a tombstone get
+// skipped and the value it hid resurface from an older level.
 type KEY_LOOKUP_ENUM uint8
 
 const (

@@ -122,19 +122,9 @@ func MakeSearchKey(userKey []byte) InternalKey {
 }
 
 // MakeSearchKeyAt constructs a search key that sorts before every version of
-// userKey that is visible at snapshot, and after every version that is not.
-// A seek to it therefore lands directly on the newest visible version, with no
-// filtering needed afterwards.
-//
-// This works because trailers sort descending: a version with a sequence
-// number above the snapshot has a larger trailer and so sorts BEFORE the
-// search key, while a visible one sorts at or after it. InternalKeyKindMax as
-// the kind makes the boundary inclusive — a Set written exactly at the
-// snapshot's own sequence number produces an equal trailer, and
-// Visible(snapshot) is defined as seqNum <= snapshot.
-//
-// MakeSearchKey is the SeqNumMax case of this: a snapshot that can see
-// everything.
+// userKey visible at snapshot and after every version that isn't — so a seek
+// lands directly on the newest visible version. MakeSearchKey is just the
+// SeqNumMax case of this.
 func MakeSearchKeyAt(userKey []byte, snapshot SeqNum) InternalKey {
 	return MakeInternalKey(userKey, snapshot, InternalKeyKindMax)
 }
