@@ -4,7 +4,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/hchauhan7816/hcdb/config"
 	"github.com/hchauhan7816/hcdb/wal"
 )
 
@@ -23,7 +22,7 @@ func BenchmarkWalAppend(b *testing.B) {
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
-		entry := wal.Entry{Type: config.OP_PUT, Key: []byte(k), Value: []byte(v)}
+		entry := wal.Entry{Key: []byte(k), Value: []byte(v)}
 		err := walObj.Append(entry)
 		if err != nil {
 			b.Fatalf("append: %v", err)

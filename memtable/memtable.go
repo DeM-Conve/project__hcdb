@@ -1,12 +1,21 @@
 package memtable
 
 import (
+	"bytes"
+
 	"github.com/google/btree"
 	"github.com/hchauhan7816/hcdb/config"
+	"github.com/hchauhan7816/hcdb/internal/base"
 )
 
+// Less orders by user key ascending, then sequence number descending, so the
+// newest version of a key sorts first.
 func (a Item) Less(b btree.Item) bool {
-	return string(a.Key) < string(b.(Item).Key)
+	return base.InternalCompare(
+		bytes.Compare,
+		base.DecodeInternalKey(a.Key),
+		base.DecodeInternalKey(b.(Item).Key),
+	) < 0
 }
 
 func NewMemTable() *MemTable {
@@ -15,55 +24,54 @@ func NewMemTable() *MemTable {
 	}
 }
 
-func (memTable *MemTable) Put(key []byte, value []byte) {
+// Put inserts an already-encoded internal key. Each sequence number produces a
+// distinct key, so versions accumulate instead of replacing each other.
+func (memTable *MemTable) Put(internalKey []byte, value []byte) {
+	memTable.insert(internalKey, value)
+}
+
+// Delete inserts a tombstone. The key's trailer already marks it as a delete,
+// so this differs from Put only in carrying no value.
+func (memTable *MemTable) Delete(internalKey []byte) {
+	memTable.insert(internalKey, nil)
+}
+
+func (memTable *MemTable) insert(internalKey []byte, value []byte) {
 	memTable.mut.Lock()
 	defer memTable.mut.Unlock()
 
-	newItem := Item{Key: key, Value: value, Type: 0}
-
-	old := memTable.tree.Get(newItem)
-	if old != nil {
-		oldItem := old.(Item)
-		memTable.size -= (len(oldItem.Key) + len(oldItem.Value))
-	}
+	newItem := Item{Key: internalKey, Value: value}
 
 	memTable.tree.ReplaceOrInsert(newItem)
 	memTable.size += (len(newItem.Key) + len(newItem.Value))
 }
 
-func (memTable *MemTable) Get(key []byte) ([]byte, bool) {
+// Get returns the newest version of userKey visible at snapshot (pass
+// base.SeqNumMax for the latest write). Three-valued so a tombstone can stop
+// the search instead of looking like "not here" to the caller.
+func (memTable *MemTable) Get(userKey []byte, snapshot base.SeqNum) ([]byte, base.KEY_LOOKUP_ENUM) {
 	memTable.mut.RLock()
 	defer memTable.mut.RUnlock()
 
-	result := memTable.tree.Get(Item{Key: key})
-	if result == nil {
-		return nil, false
+	var found *Item
+
+	memTable.tree.AscendGreaterOrEqual(Item{Key: encodeSearchKey(userKey, snapshot)}, func(i btree.Item) bool {
+		item := i.(Item)
+		if !bytes.Equal(base.DecodeInternalKey(item.Key).UserKey, userKey) {
+			return false // walked past this user key entirely
+		}
+		found = &item
+		return false
+	})
+
+	if found == nil {
+		return nil, base.KEY_ABSENT
+	}
+	if base.DecodeInternalKey(found.Key).Kind() == base.InternalKeyKindDelete {
+		return nil, base.KEY_DELETED
 	}
 
-	item := result.(Item)
-	if item.Type == config.OP_DELETE {
-		return nil, false // tombstone
-	}
-
-	return item.Value, true
-}
-
-func (memTable *MemTable) Delete(key []byte) {
-	memTable.mut.Lock()
-	defer memTable.mut.Unlock()
-
-	searchItem := Item{Key: key}
-
-	old := memTable.tree.Get(searchItem)
-	if old != nil {
-		oldItem := old.(Item)
-		memTable.size -= (len(oldItem.Key) + len(oldItem.Value))
-	}
-
-	tombstone := Item{Key: key, Value: nil, Type: 1}
-	memTable.tree.ReplaceOrInsert(tombstone)
-
-	memTable.size += len(tombstone.Key)
+	return found.Value, base.KEY_FOUND
 }
 
 func (memTable *MemTable) Size() int {
@@ -73,12 +81,22 @@ func (memTable *MemTable) Size() int {
 	return memTable.size
 }
 
-func (memTable *MemTable) Ascend(fn func(key, value []byte, itemType uint8) bool) {
+// Ascend walks entries in internal-key order, so keys arrive with their
+// trailers intact (kind included) and versions of one user key arrive
+// newest-first.
+func (memTable *MemTable) Ascend(fn func(key, value []byte) bool) {
 	memTable.mut.RLock()
 	defer memTable.mut.RUnlock()
 
 	memTable.tree.Ascend(func(i btree.Item) bool {
 		item := i.(Item)
-		return fn(item.Key, item.Value, item.Type)
+		return fn(item.Key, item.Value)
 	})
+}
+
+func encodeSearchKey(userKey []byte, snapshot base.SeqNum) []byte {
+	k := base.MakeSearchKeyAt(userKey, snapshot)
+	buf := make([]byte, k.Size())
+	k.Encode(buf)
+	return buf
 }

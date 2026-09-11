@@ -4,18 +4,18 @@ import (
 	"bytes"
 	"container/heap"
 
-	"github.com/hchauhan7816/hcdb/config"
+	"github.com/hchauhan7816/hcdb/internal/base"
 	"github.com/hchauhan7816/hcdb/memtable"
 	"github.com/hchauhan7816/hcdb/sstable"
 )
 
-// source is anything the merging iterator can pull sorted entries from —
-// the memtable and each SSTable all implement this identically.
+// source is anything the merging iterator can pull sorted entries from — the
+// memtable and each SSTable all implement this identically. Keys are encoded
+// internal keys, so the kind comes from the key rather than a separate field.
 type source interface {
 	Valid() bool
 	Key() []byte
 	Value() []byte
-	Type() uint8
 	Next()
 }
 
@@ -29,8 +29,16 @@ type mergeHeap []*mergeItem
 
 func (h mergeHeap) Len() int { return len(h) }
 
+// Less orders by internal key: user key ascending, then sequence number
+// descending, so the newest version of a key pops first. priority only breaks
+// ties between identical internal keys, which happens when the same write is
+// present in both a replayed memtable and an already-flushed SSTable.
 func (h mergeHeap) Less(i, j int) bool {
-	c := bytes.Compare(h[i].key, h[j].key)
+	c := base.InternalCompare(
+		bytes.Compare,
+		base.DecodeInternalKey(h[i].key),
+		base.DecodeInternalKey(h[j].key),
+	)
 	if c != 0 {
 		return c < 0
 	}
@@ -63,18 +71,25 @@ type MergeIterator struct {
 // Scan returns an iterator over [lowerBound, upperBound] across the
 // memtable and all SSTables, merged in sorted order.
 func (db *DB) Scan(lowerBound, upperBound []byte) (*MergeIterator, error) {
+	return db.ScanAt(lowerBound, upperBound, base.SeqNumMax)
+}
+
+// ScanAt is Scan restricted to versions visible at snapshot. Each source
+// iterator does its own filtering, so the merge logic here needs no snapshot
+// awareness at all.
+func (db *DB) ScanAt(lowerBound, upperBound []byte, snapshot base.SeqNum) (*MergeIterator, error) {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 
 	m := &MergeIterator{upperBound: upperBound}
 
-	memIt := memtable.NewIterator(db.memtable, lowerBound, upperBound)
+	memIt := memtable.NewIterator(db.memtable, lowerBound, upperBound, snapshot)
 	if memIt.Valid() {
 		heap.Push(&m.h, &mergeItem{key: memIt.Key(), priority: 0, src: memIt})
 	}
 
 	for i, sst := range db.sstables {
-		sstIt, err := sstable.NewIterator(sst, lowerBound)
+		sstIt, err := sstable.NewIterator(sst, lowerBound, snapshot)
 		if err != nil {
 			return nil, err
 		}
@@ -91,33 +106,29 @@ func (db *DB) Scan(lowerBound, upperBound []byte) (*MergeIterator, error) {
 func (m *MergeIterator) Next() bool {
 	for m.h.Len() > 0 {
 		top := heap.Pop(&m.h).(*mergeItem)
-		key := top.key
+		ik := base.DecodeInternalKey(top.key)
+		userKey, kind := ik.UserKey, ik.Kind()
+		val := top.src.Value() // read before advancing the source
 
-		// duplicate keys from older sources: advance and discard, don't emit
-		for m.h.Len() > 0 && bytes.Equal(m.h[0].key, key) {
-			dup := heap.Pop(&m.h).(*mergeItem)
-			dup.src.Next()
-			if dup.src.Valid() {
-				heap.Push(&m.h, &mergeItem{key: dup.src.Key(), priority: dup.priority, src: dup.src})
-			}
+		// Every remaining entry for this user key is an older version that the
+		// one just popped supersedes — skip them all. That includes further
+		// versions inside top's own source, not just duplicates in other
+		// sources, since one source can hold many versions of a key.
+		skipPast(userKey, top, &m.h)
+		for m.h.Len() > 0 && bytes.Equal(base.DecodeInternalKey(m.h[0].key).UserKey, userKey) {
+			skipPast(userKey, heap.Pop(&m.h).(*mergeItem), &m.h)
 		}
 
-		val, typ := top.src.Value(), top.src.Type()
-		top.src.Next()
-		if top.src.Valid() {
-			heap.Push(&m.h, &mergeItem{key: top.src.Key(), priority: top.priority, src: top.src})
-		}
-
-		if m.upperBound != nil && bytes.Compare(key, m.upperBound) > 0 {
+		if m.upperBound != nil && bytes.Compare(userKey, m.upperBound) > 0 {
 			m.valid = false
 			return false
 		}
 
-		if typ == config.OP_DELETE {
+		if kind == base.InternalKeyKindDelete {
 			continue
 		}
 
-		m.key, m.val = key, val
+		m.key, m.val = userKey, val
 		m.valid = true
 		return true
 	}
@@ -129,3 +140,16 @@ func (m *MergeIterator) Next() bool {
 func (m *MergeIterator) Key() []byte   { return m.key }
 func (m *MergeIterator) Value() []byte { return m.val }
 func (m *MergeIterator) Valid() bool   { return m.valid }
+
+// skipPast advances item's source beyond every entry for userKey, then puts
+// the source back on the heap if it still has data.
+func skipPast(userKey []byte, item *mergeItem, h *mergeHeap) {
+	for item.src.Next(); item.src.Valid(); item.src.Next() {
+		if !bytes.Equal(base.DecodeInternalKey(item.src.Key()).UserKey, userKey) {
+			break
+		}
+	}
+	if item.src.Valid() {
+		heap.Push(h, &mergeItem{key: item.src.Key(), priority: item.priority, src: item.src})
+	}
+}

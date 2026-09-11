@@ -6,38 +6,43 @@ import (
 	"io"
 	"os"
 
-	"github.com/hchauhan7816/hcdb/config"
+	"github.com/hchauhan7816/hcdb/internal/base"
 )
 
-// Lookup — bloom filter check happens BEFORE any disk read
-func (sst *SSTable) Lookup(key []byte) ([]byte, KEY_LOOKUP_ENUM, error) {
+// Lookup takes a user key and returns its newest version in this SSTable.
+//
+//	user key → bloom.MightContain()        (bloom indexes user keys)
+//	    ├─ no  → base.KEY_ABSENT      (zero disk I/O)
+//	    └─ yes → seek an Iterator to the user key, which lands on its newest
+//	             version (or on the next user key if it is absent)
+//
+// The seek is delegated to Iterator rather than doing a single searchIndex
+// lookup, because a search key sorts BEFORE every real version of its user
+// key: when a user key happens to be a block's first key, searchIndex points
+// at the PREVIOUS block. Iterator walks forward across blocks and lands
+// correctly; the same applies when one user key's versions span two blocks.
+func (sst *SSTable) Lookup(userKey []byte, snapshot base.SeqNum) ([]byte, base.KEY_LOOKUP_ENUM, error) {
 	// bloom says definitely not here — skip disk entirely
-	if !sst.bloom.MightContain(key) {
-		return nil, KEY_ABSENT, nil
+	if !sst.bloom.MightContain(userKey) {
+		return nil, base.KEY_ABSENT, nil
 	}
 
-	blockIdx := searchIndex(sst.index, key)
-	if blockIdx < 0 {
-		return nil, KEY_ABSENT, nil
-	}
-
-	entries, err := sst.readBlock(sst.index[blockIdx])
+	it, err := NewIterator(sst, userKey, snapshot)
 	if err != nil {
-		return nil, KEY_ABSENT, err
+		return nil, base.KEY_ABSENT, err
+	}
+	if !it.Valid() {
+		return nil, base.KEY_ABSENT, nil
 	}
 
-	return findInBlockLookup(entries, key)
-}
-
-func (sst *SSTable) Get(key []byte) ([]byte, bool, error) {
-	val, st, err := sst.Lookup(key)
-	if err != nil {
-		return nil, false, err
+	ik := base.DecodeInternalKey(it.Key())
+	if !bytes.Equal(ik.UserKey, userKey) {
+		return nil, base.KEY_ABSENT, nil
 	}
-	if st != KEY_FOUND {
-		return nil, false, nil
+	if ik.Kind() == base.InternalKeyKindDelete {
+		return nil, base.KEY_DELETED, nil
 	}
-	return val, true, nil
+	return it.Value(), base.KEY_FOUND, nil
 }
 
 func (sst *SSTable) readBlock(idx IndexEntry) ([]BlockEntry, error) {
@@ -76,14 +81,20 @@ func (sst *SSTable) readBlock(idx IndexEntry) ([]BlockEntry, error) {
 	return entries, nil
 }
 
-func findInBlockLookup(entries []BlockEntry, key []byte) ([]byte, KEY_LOOKUP_ENUM, error) {
-	for _, e := range entries {
-		if bytes.Equal(e.Key, key) {
-			if e.Type == config.OP_DELETE {
-				return nil, KEY_DELETED, nil
-			}
-			return e.Value, KEY_FOUND, nil
-		}
-	}
-	return nil, KEY_ABSENT, nil
+// EncodeSearchKeyAt builds the encoded internal key used to seek to the newest
+// version of userKey visible at snapshot.
+func EncodeSearchKeyAt(userKey []byte, snapshot base.SeqNum) []byte {
+	k := base.MakeSearchKeyAt(userKey, snapshot)
+	buf := make([]byte, k.Size())
+	k.Encode(buf)
+	return buf
+}
+
+// EncodeSearchKey builds the encoded internal key used to seek to the newest
+// version of userKey.
+func EncodeSearchKey(userKey []byte) []byte {
+	k := base.MakeSearchKey(userKey)
+	buf := make([]byte, k.Size())
+	k.Encode(buf)
+	return buf
 }

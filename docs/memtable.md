@@ -72,25 +72,44 @@ The lookup-before-insert exists purely for **size accounting**. `ReplaceOrInsert
 place, so without subtracting the old entry's bytes first, overwriting the same key 1000 times
 would inflate `size` 1000× and trigger a flush of a table that is actually tiny.
 
-### `Get(key)`
+### `Get(userKey)`
+
+`Get` takes a **user key**, not an internal key — the caller does not know which sequence
+number it wants. It builds a search key (`userKey` + `SeqNumMax`), which sorts before every
+real version of that user key, then walks forward one step:
 
 ```go
-result := tree.Get(Item{Key: key})   // only Key matters — Less() ignores the rest
-if result == nil          { return nil, false }
-if item.Type == OP_DELETE { return nil, false }   // tombstone
-return item.Value, true
+tree.AscendGreaterOrEqual(Item{Key: encodeSearchKey(userKey)}, func(i btree.Item) bool {
+    item := i.(Item)
+    if !bytes.Equal(DecodeInternalKey(item.Key).UserKey, userKey) {
+        return false   // walked past this user key entirely — absent
+    }
+    found = &item
+    return false       // first hit is the newest version; stop
+})
 ```
 
-Two distinct "not found" cases collapse into the same `(nil, false)` return:
+The result is **three-valued**, matching the SSTable layer's `KEY_LOOKUP_ENUM` (both now share
+`base.KEY_LOOKUP_ENUM`):
 
-1. **Not in this memtable** — the caller (`db.Get`) should keep looking in the SSTables.
-2. **Tombstoned here** — the key is deleted; the caller should *stop* looking.
+| result | meaning | what `db.Get` does |
+|---|---|---|
+| `KEY_ABSENT` | this memtable says nothing about the key | keep searching the SSTables |
+| `KEY_FOUND` | newest version is a live value | return it |
+| `KEY_DELETED` | newest version is a tombstone | stop — return not-found |
 
-These are conflated. `db.Get` falls through to `searchSSTables` in both cases. It happens to
-still be correct, because the SSTable layer has its own tombstone handling (`KEY_DELETED`) and
-the flushed SSTable containing the tombstone is searched newest-first — but only when the
-tombstone has already been flushed. The SSTable layer models this properly with a three-valued
-`KEY_LOOKUP_ENUM`; the memtable does not.
+The distinction is not cosmetic. `Get` used to return `(nil, false)` for both absent and
+tombstoned, so `db.Get` fell through to `searchSSTables` in both cases — and this sequence
+returned the deleted value:
+
+```
+Put("gone", "back")   →  lives in the memtable
+ForceFlush()          →  "back" is now in an SSTable
+Delete("gone")        →  tombstone is in the memtable
+Get("gone")           →  "back"    ← wrong, the tombstone was invisible
+```
+
+Regression test: `TestGetStopsAtTombstone` in `db/operations_test.go`.
 
 ### `Delete(key)`
 

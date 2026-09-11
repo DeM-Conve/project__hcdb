@@ -12,7 +12,8 @@ process. `FaultyWriter` fakes the failure instead: it wraps any `io.Writer` and,
 configured byte count, starts returning errors — including **partial success followed by an
 error**, not just a clean all-or-nothing failure. That partial-write behavior matters: a real
 crash mid-`write()` can leave some bytes on disk and the rest lost, which is a torn write, not a
-clean failure. Modeled on Pebble's `vfs/errorfs`.
+clean failure. Modeled on the error-injecting filesystem wrappers storage engines use to test
+their own recovery paths.
 
 ## Type
 

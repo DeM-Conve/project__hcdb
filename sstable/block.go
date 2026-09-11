@@ -9,25 +9,8 @@ import (
 )
 
 // ============================================================
-// SSTable Block Layout (on disk)
+// Block encoding. For where blocks sit inside the file, see writer.go.
 //
-// Each SSTable file is structured as:
-//
-//   +-------------------+
-//   |   Block 1         |
-//   +-------------------+
-//   |   Block 2         |
-//   +-------------------+
-//   |   ...             |
-//   +-------------------+
-//   |   Index           |
-//   +-------------------+
-//   |   BloomLen+Bloom  |
-//   +-------------------+
-//   |   Footer          |
-//   +-------------------+
-//
-// ------------------------------------------------------------
 // Block Format:
 //
 //   +----------------------+
@@ -43,16 +26,23 @@ import (
 // ------------------------------------------------------------
 // BlockEntry (each record inside block):
 //
-//   +--------+---------+----------+-------+--------+
-//   | Type   | keyLen  | valLen   | key   | value  |
-//   | 1 byte | 4 bytes | 4 bytes  | bytes | bytes  |
-//   +--------+---------+----------+-------+--------+
+//   +---------+----------+---------------+--------+
+//   | keyLen  | valLen   | internal key  | value  |
+//   | 4 bytes | 4 bytes  | bytes         | bytes  |
+//   +---------+----------+---------------+--------+
+//
+//   internal key = user key + 8-byte trailer (seqNum<<8 | kind), so keyLen
+//   is len(userKey)+8. See internal/base.
 //
 //
 // Notes:
 // - Blocks are ~4KB in size
 // - CRC is used for corruption detection
 // - Entire block is read at once during lookup
+// - Entries are sorted by user key ascending, then sequence number
+//   descending, so multiple versions of one user key sit next to each other
+//   with the newest first
+// - There is no type byte: put vs delete lives in the key's trailer
 // ============================================================
 
 func encodeBlock(entries []BlockEntry) ([]byte, error) {
@@ -77,9 +67,6 @@ func encodeBlock(entries []BlockEntry) ([]byte, error) {
 }
 
 func writeBlockEntry(buf *bytes.Buffer, e BlockEntry) error {
-	if err := binary.Write(buf, binary.LittleEndian, e.Type); err != nil {
-		return err
-	}
 	if err := binary.Write(buf, binary.LittleEndian, uint32(len(e.Key))); err != nil {
 		return err
 	}
@@ -127,12 +114,8 @@ func decodeBlock(blockBytes []byte) ([]BlockEntry, error) {
 }
 
 func readBlockEntry(r io.Reader) (BlockEntry, error) {
-	var opType uint8
 	var keyLen, valLen uint32
 
-	if err := binary.Read(r, binary.LittleEndian, &opType); err != nil {
-		return BlockEntry{}, err
-	}
 	if err := binary.Read(r, binary.LittleEndian, &keyLen); err != nil {
 		return BlockEntry{}, err
 	}
@@ -150,5 +133,5 @@ func readBlockEntry(r io.Reader) (BlockEntry, error) {
 		return BlockEntry{}, err
 	}
 
-	return BlockEntry{Key: key, Value: val, Type: opType}, nil
+	return BlockEntry{Key: key, Value: val}, nil
 }

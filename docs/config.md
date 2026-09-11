@@ -32,9 +32,10 @@ block and out through compaction without ever being translated.
 `OP_DELETE` is the tombstone marker. There is no "remove" anywhere in the system — a delete is a
 write of a record whose type is `OP_DELETE` and whose value is empty.
 
-> Note: `memtable.Put` and `memtable.Delete` write the literal values `0` and `1` rather than
-> the named constants, though `memtable.Get` compares against `config.OP_DELETE`. Same values,
-> just inconsistent.
+> Note: `OP_PUT`/`OP_DELETE` no longer exist. Put-vs-delete is recorded in exactly one place —
+> the `kind` byte in an internal key's trailer (`base.InternalKeyKindSet` /
+> `base.InternalKeyKindDelete`). No record, block entry or memtable item carries a separate
+> type field any more.
 
 ## Validation bounds
 

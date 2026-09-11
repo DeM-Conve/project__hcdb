@@ -51,7 +51,7 @@ func (walObj *WAL) Replay() ([]Entry, error) {
 		}
 
 		// Validate Total Length
-		if totalLength > (1 + 4 + config.MAX_KEY_LENGTH + 4 + config.MAX_VALUE_LENGTH + 4) {
+		if totalLength > (4 + maxEncodedKeyLen + 4 + config.MAX_VALUE_LENGTH + 4) {
 			fmt.Println("Total length is greater than expected:", totalLength)
 			walObj.File.Truncate(startOffset)
 			break
@@ -88,14 +88,6 @@ func (walObj *WAL) Replay() ([]Entry, error) {
 		// Parse Data Part
 		buffReader := bytes.NewReader(dataPart)
 
-		var opType uint8
-
-		if err := binary.Read(buffReader, binary.LittleEndian, &opType); err != nil {
-			fmt.Println("Error reading type of event:", err)
-			walObj.File.Truncate(startOffset)
-			break
-		}
-
 		var keyLength uint32
 		var valueLength uint32
 
@@ -111,7 +103,7 @@ func (walObj *WAL) Replay() ([]Entry, error) {
 			break
 		}
 
-		if keyLength > config.MAX_KEY_LENGTH || valueLength > config.MAX_VALUE_LENGTH {
+		if keyLength > maxEncodedKeyLen || valueLength > config.MAX_VALUE_LENGTH {
 			fmt.Println("Key length or value length is greater than expected:", keyLength, valueLength)
 			walObj.File.Truncate(startOffset)
 			break
@@ -132,7 +124,7 @@ func (walObj *WAL) Replay() ([]Entry, error) {
 			break
 		}
 
-		entries = append(entries, Entry{Key: key, Value: value, Type: opType})
+		entries = append(entries, Entry{Key: key, Value: value})
 	}
 
 	return entries, nil

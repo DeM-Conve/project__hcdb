@@ -109,7 +109,8 @@ is just `LRU.Get`'s own bookkeeping (map lookup + `MoveToFront`).
   (which `sstable.readBlock` can now trigger, since `db.Get`/`Scan` only take `db.mu.RLock`) race
   on the map and the list.
 - **Plain LRU, not scan-resistant.** A large sequential scan will evict the entire hot working
-  set in one pass — Pebble uses CLOCK-Pro specifically to resist this; hcdb does not yet.
+  set in one pass. Production engines use a scan-resistant policy (CLOCK-Pro, or InnoDB's
+  split young/old LRU) precisely to avoid this; hcdb does not yet.
 - **No eviction-order test, no hit-rate counter, no sharding.** Sizing
   (`config.DEFAULT_BLOCK_CACHE_ENTRIES = 256`) is a starting guess, not tuned against real hit
   rate.

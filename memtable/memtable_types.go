@@ -7,8 +7,7 @@ import (
 )
 
 type Item struct {
-	Type  uint8
-	Key   []byte
+	Key   []byte // encoded internal key; its trailer carries the kind
 	Value []byte
 }
 
