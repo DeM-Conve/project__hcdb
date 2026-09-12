@@ -1,0 +1,21 @@
+services:
+  hcdb:
+    build: .
+    ports:
+      - "6380:6380"
+    volumes:
+      - hcdb-data:/app/assets
+
+  # real redis-cli, pointed at the hcdb service above — this is what lets you
+  # actually play with the DB by hand, e.g.:
+  #   docker compose run --rm redis-cli SET foo bar
+  #   docker compose run --rm redis-cli GET foo
+  #   docker compose run --rm redis-cli SCAN a z
+  redis-cli:
+    image: redis:7-alpine
+    entrypoint: ["redis-cli", "-h", "hcdb", "-p", "6380"]
+    depends_on:
+      - hcdb
+
+volumes:
+  hcdb-data:
