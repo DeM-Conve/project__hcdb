@@ -9,6 +9,28 @@ import (
 
 // Read parses one RESP value from r, recursing into Array elements.
 //
+// Worked example — a client sending SET port 8080 puts these bytes on the wire:
+//
+//	"*3\r\n$3\r\nSET\r\n$4\r\nport\r\n$4\r\n8080\r\n"
+//
+//	*3          array, 3 elements follow
+//	$3  SET     bulk string, 3 bytes
+//	$4  port    bulk string, 4 bytes
+//	$4  8080    bulk string, 4 bytes
+//
+// Note $4 for 8080: the length counts CHARACTERS, not magnitude — the value is
+// the text '8','0','8','0', not the number 8080. Commands carry no numeric type
+// at all; every argument is a bulk string, because a key or value may be any
+// bytes of any length. The ':' Integer type only ever appears in replies.
+//
+// Read produces:
+//
+//	Value{Type: Array, Elems: [
+//	  {Type: BulkString, Str: "SET"},
+//	  {Type: BulkString, Str: "port"},
+//	  {Type: BulkString, Str: "8080"},
+//	]}
+//
 // Built entirely on bufio.Reader's ReadString/ReadByte/Read, which block and
 // retry against the underlying connection as needed — so a client that
 // writes one byte at a time is indistinguishable from one that writes a
