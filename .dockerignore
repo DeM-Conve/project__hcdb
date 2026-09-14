@@ -1,0 +1,12 @@
+.git
+.gitignore
+assets/
+*.wal
+*.sst
+*.test
+*.out
+.benchdata/
+docs/
+README.md
+docker-compose.yml
+Dockerfile

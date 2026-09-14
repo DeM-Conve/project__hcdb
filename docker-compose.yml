@@ -1,18 +1,32 @@
 services:
   hcdb:
     build: .
+    image: hcdb-server:latest
+    restart: unless-stopped
     ports:
-      - "6380:6380"
+      - "${HCDB_PORT:-6380}:6380"
+    environment:
+      HCDB_DATA_DIR: "${HCDB_DATA_DIR:-/data}"
     volumes:
-      - hcdb-data:/app/assets
+      - hcdb-data:${HCDB_DATA_DIR:-/data}
+    # See .env.example for overriding these.
+    mem_limit: ${HCDB_MEM_LIMIT:-4g}
+    cpus: ${HCDB_CPUS:-2.0}
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      start_period: 5s
 
-  # real redis-cli, pointed at the hcdb service above — this is what lets you
-  # actually play with the DB by hand, e.g.:
-  #   docker compose run --rm redis-cli SET foo bar
-  #   docker compose run --rm redis-cli GET foo
-  #   docker compose run --rm redis-cli SCAN a z
+  # redis-cli against the hcdb service. Not started by `docker compose up`;
+  # requires the "tools" profile:
+  #   docker compose --profile tools run --rm redis-cli
+  #   docker compose --profile tools run --rm redis-cli SET foo bar
   redis-cli:
     image: redis:7-alpine
+    profiles: ["tools"]
     entrypoint: ["redis-cli", "-h", "hcdb", "-p", "6380"]
     depends_on:
       - hcdb
