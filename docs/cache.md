@@ -1,6 +1,6 @@
 # Cache — shared block cache
 
-Package: `cache/` — files: `lru.go`, `operations.go`
+Package: `cache/` — files: `lru.go`, `operations.go`, `sharded.go`
 
 ## Why it exists
 
@@ -22,6 +22,7 @@ type entry struct {
 }
 
 type LRU struct {
+    mu       sync.RWMutex
     capacity int
     ll       *list.List               // front = most recently used
     items    map[string]*list.Element // key -> node in the list, O(1) lookup
@@ -31,6 +32,11 @@ type LRU struct {
 `value` is `any`, not `[]byte` — the whole point is to cache **decoded** blocks
 (`[]sstable.BlockEntry`), not raw bytes, so the decode cost is what actually gets skipped on a
 hit. Callers type-assert back to the concrete type they stored.
+
+`LRU` now carries its own `sync.RWMutex` — `insert` (called by `Put`) and `Get` both take the
+write lock (`Get` still mutates the list via `MoveToFront`, so it can't use `RLock`); `Len` takes
+the read lock. This is what makes a single `*cache.LRU` safe to share across the concurrent
+readers `sstable.readBlock` can now see (see Known limitations for what changed with this).
 
 ## Design: hashmap + doubly-linked list
 
@@ -51,22 +57,56 @@ check, a zero-value cache would evict every item immediately after inserting it.
 `insert`/`evictOldest` live in `lru.go` (the list/map mechanics); `Get`/`Put`/`Len` — the public
 API — live in `operations.go`, matching the rest of the codebase's types-vs-behavior split.
 
+## Sharding (`sharded.go`)
+
+A single `*LRU`'s mutex serializes every `Get`/`Put` across every SSTable in the database — under
+concurrent reads that lock becomes the bottleneck the mutex was added to avoid trading for.
+`ShardedLRU` spreads the cache across N independent `*LRU` instances:
+
+```go
+type Cacher interface {
+    Get(key string) (any, bool)
+    Put(key string, value any)
+}
+
+type ShardedLRU struct {
+    shards []*LRU
+}
+
+func shardIndex(key string, numShards int) int {
+    h := fnv.New32a()
+    h.Write([]byte(key))
+    return int(h.Sum32() % uint32(numShards))
+}
+```
+
+Each `Get`/`Put` hashes the cache key (FNV-1a) to pick one shard and only takes that shard's lock
+— unrelated keys in different shards never contend. `Len()` sums every shard's `Len()`. `db.Open`
+constructs one `cache.ShardedLRU` with `config.DEFAULT_CACHE_SHARD_COUNT` (16) shards of
+`config.DEFAULT_BLOCK_CACHE_ENTRIES / DEFAULT_CACHE_SHARD_COUNT` entries each — so the *total*
+entry budget is unchanged from a single unsharded LRU, just distributed. `Cacher` is the interface
+`sstable.SSTable.cache` actually holds, satisfied by both `*LRU` and `*ShardedLRU` — plain `*LRU`
+is still usable directly (and is what each shard is, underneath).
+
 ## Wired into hcdb
 
-One shared `*cache.LRU` per `DB`, not one per SSTable:
+One shared `cache.Cacher` per `DB` (a `*ShardedLRU` in practice), not one per SSTable:
 
 ```go
 // db.Open
-blockCache := cache.NewLRU(config.DEFAULT_BLOCK_CACHE_ENTRIES)
+blockCache := cache.NewShardedLRU(
+    config.DEFAULT_CACHE_SHARD_COUNT,
+    config.DEFAULT_BLOCK_CACHE_ENTRIES/config.DEFAULT_CACHE_SHARD_COUNT,
+)
 for _, sst := range tables {
     sst.SetCache(blockCache)
 }
 ```
 
-Every `sstable.SSTable` holds a **pointer** to the same instance (`sst.SetCache`), so all
-SSTables compete for the same fixed budget — a hot block in one file naturally evicts a cold
-block from another, which is the correct behavior. `flushMemtable` attaches the same cache to
-the newly flushed SSTable and to every SSTable that comes back from `compaction.Compact`.
+Every `sstable.SSTable` holds the same `Cacher` (`sst.SetCache`), so all SSTables compete for the
+same fixed budget — a hot block in one file naturally evicts a cold block from another, which is
+the correct behavior. `flushMemtable`/`flushMemtableLocked` attaches the same cache to the newly
+flushed SSTable and to every SSTable that comes back from `compaction.Compact`.
 
 `sstable.readBlock` (`sstable.go`) is the only call site:
 
@@ -104,16 +144,15 @@ is just `LRU.Get`'s own bookkeeping (map lookup + `MoveToFront`).
 
 ## Known limitations
 
-- **Not concurrency-safe.** No mutex anywhere in this package — a single-threaded LRU only,
-  exactly matching Feature 6's incremental scope. Concurrent `Get`/`Put` from multiple goroutines
-  (which `sstable.readBlock` can now trigger, since `db.Get`/`Scan` only take `db.mu.RLock`) race
-  on the map and the list.
-- **Plain LRU, not scan-resistant.** A large sequential scan will evict the entire hot working
-  set in one pass. Production engines use a scan-resistant policy (CLOCK-Pro, or InnoDB's
-  split young/old LRU) precisely to avoid this; hcdb does not yet.
-- **No eviction-order test, no hit-rate counter, no sharding.** Sizing
-  (`config.DEFAULT_BLOCK_CACHE_ENTRIES = 256`) is a starting guess, not tuned against real hit
-  rate.
+- **Plain LRU per shard, not scan-resistant.** A large sequential scan will still evict a shard's
+  entire hot working set in one pass. Production engines use a scan-resistant policy (CLOCK-Pro,
+  or InnoDB's split young/old LRU) precisely to avoid this; hcdb does not yet.
+- **Sharding is unweighted and fixed at 16.** Every shard gets an equal slice of the entry budget
+  regardless of actual key distribution, and `DEFAULT_CACHE_SHARD_COUNT` isn't tuned against a
+  real contention measurement.
+- **No eviction-order test on `ShardedLRU` itself, no hit-rate counter.** Sizing
+  (`config.DEFAULT_BLOCK_CACHE_ENTRIES = 256` total) is a starting guess, not tuned against real
+  hit rate.
 - **Stale entries on file deletion.** If `compaction.Compact` deletes an SSTable file that still
   has cached blocks, those entries sit in the cache holding data for a file that no longer
   exists. Harmless today only because nothing ever looks them up again by that exact

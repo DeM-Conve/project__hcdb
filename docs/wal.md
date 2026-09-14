@@ -29,11 +29,17 @@ type WAL struct {
 }
 
 type Entry struct {
-    Type  uint8   // config.OP_PUT (0) | config.OP_DELETE (1)
-    Key   []byte
+    Key   []byte // encoded internal key; its trailer carries the kind
     Value []byte
 }
 ```
+
+`Entry` no longer carries a `Type` byte. `Key` is an already-**encoded internal key** — the user
+key plus an 8-byte trailer packing a sequence number and a kind (`base.InternalKeyKindSet` /
+`base.InternalKeyKindDelete`, see [internal key format](#internal-keys-mvcc) below and
+`internal/base/internal.go`). Put and Delete are no longer distinguished by a separate field
+anywhere in the record — the trailer already says which one this is, so the record can't
+disagree with itself.
 
 `Open` opens the file with `O_CREATE|O_RDWR|O_APPEND` (0644) and wraps it in a `bufio.Writer`.
 Append-only is a deliberate choice — no seeking, no rewriting, purely sequential disk writes.
@@ -41,28 +47,48 @@ Append-only is a deliberate choice — no seeking, no rewriting, purely sequenti
 ## On-disk record format
 
 ```
-[ totalLen (4B) ][ type (1B) ][ keyLen (4B) ][ valLen (4B) ][ key ][ value ][ crc32 (4B) ]
-                 └──────────────────── dataBytes ──────────────────────────┘
+[ totalLen (4B) ][ keyLen (4B) ][ valLen (4B) ][ internal key ][ value ][ crc32 (4B) ]
+                 └───────────────────── dataBytes ─────────────────────┘
                  └────────── covered by the CRC ─────────────┘
 ```
 
-All integers are **little-endian**.
+All integers are **little-endian**. `keyLen` is the length of the *encoded internal key*
+(user key + 8-byte trailer), not the raw user key.
 
 - `totalLen = len(dataBytes) + 4` — the payload plus the trailing CRC, but **not** the 4 bytes
   of `totalLen` itself. Replay reads 4 bytes, then reads exactly `totalLen` more bytes.
-- `crc32` is `crc32.ChecksumIEEE(dataBytes)` — IEEE polynomial, computed over type + lengths +
-  key + value.
+- `crc32` is `crc32.ChecksumIEEE(dataBytes)` — IEEE polynomial, computed over the lengths, key
+  and value.
 
 `Append` builds `dataBytes` in an in-memory `bytes.Buffer` first (`writeDataBuff`), because we
 need the full payload before we can compute its checksum and its length.
 
+## Internal keys: MVCC
+
+Every user key gets rewritten as an `internal key` before it reaches the WAL, the memtable or an
+SSTable: `db.encodeNextKey` assigns the next sequence number (`db.seqNum`, a monotonically
+increasing `atomic.Uint64` guarded in practice by `db.mu`) and packs `(seqNum, kind)` into an
+8-byte trailer appended to the user key (`base.MakeInternalKey`/`InternalKey.Encode`, see
+`internal/base/internal.go`). Two consequences that ripple through this package:
+
+- A repeated write to the same user key produces a **distinct** internal key each time, rather
+  than overwriting a prior WAL/memtable/SSTable entry in place — that's what makes it possible
+  for a `db.GetSnapshot` reader to still see an old version after a newer write has landed.
+- Replay preserves the original sequence numbers by decoding them straight out of the stored key
+  (`base.DecodeInternalKey(e.Key).SeqNum()`) rather than assigning new ones — otherwise a restart
+  would silently renumber every record and break ordering against SSTables written before the
+  crash.
+
 ## Write path — `Put` / `Delete`
 
-`operators.go` is the caller-facing API. Both do the same thing with a different op type:
+`operators.go` is the caller-facing API. Both funnel into the same `write` helper — the only
+difference is the value:
 
-- `Put(key, value)` → `Entry{Type: OP_PUT}`
-- `Delete(key)` → `Entry{Type: OP_DELETE, Value: []byte{}}` — a **tombstone**. Deletes are
-  writes, not removals. Nothing is ever erased in place.
+- `Put(key, value)` → `Entry{Key: key, Value: value}`
+- `Delete(key)` → `Entry{Key: key, Value: []byte{}}` — a **tombstone**. Deletes are
+  writes, not removals. Nothing is ever erased in place. Both `key` arguments here are already
+  encoded internal keys built by `db.encodeNextKey`, with the kind already baked into the
+  trailer — `wal.Put` and `wal.Delete` are otherwise identical.
 
 ### Group commit / sync policy
 
@@ -97,14 +123,17 @@ clean boundary.
 For each record it validates, in order:
 
 1. Read `totalLen`. Clean `io.EOF` here → normal end of log, stop.
-2. `totalLen` sanity bound: `1 + 4 + MAX_KEY_LENGTH + 4 + MAX_VALUE_LENGTH + 4`. Guards
-   against a garbage length causing a huge allocation.
+2. `totalLen` sanity bound: `4 + maxEncodedKeyLen + 4 + MAX_VALUE_LENGTH + 4`, where
+   `maxEncodedKeyLen = MAX_KEY_LENGTH + base.InternalTrailerLen` — the encoded key's 8-byte
+   trailer has to be accounted for on top of the user-key bound, or a legitimately maximum-sized
+   key would be mistaken for corruption. Guards against a garbage length causing a huge
+   allocation.
 3. `io.ReadFull` of exactly `totalLen` bytes — a short read means the record was torn.
 4. `len(recordBuf) >= 4` so the CRC slice is valid.
 5. **CRC check**: recompute over `recordBuf[:len-4]` and compare with the stored trailing 4
    bytes. Mismatch → corruption.
-6. Parse type, `keyLen`, `valLen` from the payload.
-7. `keyLen <= MAX_KEY_LENGTH && valLen <= MAX_VALUE_LENGTH`.
+6. Parse `keyLen`, `valLen` from the payload.
+7. `keyLen <= maxEncodedKeyLen && valLen <= MAX_VALUE_LENGTH`.
 8. `io.ReadFull` for the key, then the value.
 
 **Any failure at any of these steps does the same thing:**
@@ -120,7 +149,9 @@ write can only ever be at the tail (the process died mid-`write`), so truncating
 known-good boundary leaves a clean file we can keep appending to.
 
 Entries that survive are returned in write order and replayed by `db.rebuildMemtable`, which
-switches on `Type` and calls `mem.Put` / `mem.Delete`.
+decodes each entry's key (`base.DecodeInternalKey`) and switches on its `Kind()` to call
+`mem.Put` / `mem.Delete` — and tracks the highest sequence number it sees, so `db.seqNum` resumes
+above every record already durable in the log (see [db.md](db.md#opendb)).
 
 ## WAL reset on flush
 
@@ -145,11 +176,14 @@ bytes that would otherwise be written after the truncate.
 - **Single WAL, single memtable.** There is no "old WAL kept alive while the old memtable is
   being flushed" — flush is synchronous, so it doesn't need one.
 - **No manifest / log numbering.** One file, path from `Config.WALPath`.
-- **Not concurrency-safe on its own.** `putCounter` and the `bufio.Writer` are unguarded;
-  `db.Put` does not hold `db.mu` while calling `wal.Put`. Concurrent writers would race.
+- **Not concurrency-safe on its own.** `putCounter` and the `bufio.Writer` have no internal
+  locking. This package relies entirely on its caller for safety: `db.Put`/`db.Delete` now hold
+  `db.mu` for the whole call (including the WAL write), which is what actually prevents
+  concurrent writers from interleaving mid-record — see [db.md](db.md#concurrency). A caller
+  that used this package directly, without that external lock, would race.
 
 ## Related
 
 - [memtable.md](memtable.md) — what replay rebuilds
-- [db.md](db.md) — where the write ordering and `resetWAL` live
+- [db.md](db.md) — where the write ordering, locking and `resetWAL` live
 - [config.md](config.md) — `DEFAULT_SYNC_THRESHOLD`, `MAX_KEY_LENGTH`, `MAX_VALUE_LENGTH`

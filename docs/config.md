@@ -9,33 +9,25 @@ Every tunable number and shared constant lives here. Two reasons it's its own pa
 1. **No magic numbers scattered through the code.** `4096` in the SSTable writer means nothing;
    `config.DEFAULT_BLOCK_SIZE` means something.
 2. **It's the dependency sink.** `config` imports nothing. Every other package imports it. That
-   keeps the dependency graph acyclic — `wal` and `sstable` both need `OP_PUT`/`OP_DELETE`, and
-   without a shared leaf package one would have to import the other.
+   keeps the dependency graph acyclic — `wal`, `memtable` and `sstable` all need the same size
+   and threshold constants, and without a shared leaf package one would have to import another.
 
 ```
 config  ←── wal, memtable, bloomfilter, sstable, compaction, db
   (imports nothing)
 ```
 
-## Operation types
+## Kind, not a `Type` field — `config.OP_PUT`/`OP_DELETE` are gone
 
-```go
-OP_PUT    = uint8(0)
-OP_DELETE = uint8(1)
-```
-
-The same two values are used for the `Type` field in **four** different structs across three
-packages — `wal.Entry`, `memtable.Item`, `sstable.BlockEntry`, and the type byte in both on-disk
-formats. That's what lets a record flow from a WAL append, through the memtable, into an SSTable
-block and out through compaction without ever being translated.
-
-`OP_DELETE` is the tombstone marker. There is no "remove" anywhere in the system — a delete is a
-write of a record whose type is `OP_DELETE` and whose value is empty.
-
-> Note: `OP_PUT`/`OP_DELETE` no longer exist. Put-vs-delete is recorded in exactly one place —
-> the `kind` byte in an internal key's trailer (`base.InternalKeyKindSet` /
-> `base.InternalKeyKindDelete`). No record, block entry or memtable item carries a separate
-> type field any more.
+Older revisions of this codebase carried a `Type` byte (`OP_PUT` = 0, `OP_DELETE` = 1) on
+`wal.Entry`, `memtable.Item` and `sstable.BlockEntry` independently, copied from struct to
+struct as a record moved through the system. That's gone. Put-vs-delete is recorded in exactly
+one place now — the `kind` byte packed into an **internal key**'s trailer
+(`base.InternalKeyKindSet` / `base.InternalKeyKindDelete`, see `internal/base/internal.go`). A
+key's trailer also carries its sequence number (56 bits) alongside the 8-bit kind, which is what
+makes MVCC possible: every write gets a distinct internal key instead of overwriting the previous
+version in place. No record, block entry or memtable item has a separate type field to keep in
+sync with the key.
 
 ## Validation bounds
 
@@ -44,16 +36,23 @@ MAX_KEY_LENGTH   = 1024        // 1 KB
 MAX_VALUE_LENGTH = 1048576     // 1 MB
 ```
 
-These are **not enforced on write** — nothing rejects an oversized key at `Put` time. They're
-used exclusively in `wal.Replay` as sanity checks while parsing a possibly-corrupt log:
+Enforced on write now, not only on replay: `db.Put`/`db.Delete` reject an oversized key or value
+before it ever reaches the WAL (`db.ErrKeyTooLong` / `db.ErrValueTooLong`, see [db.md](db.md)).
+That closes a real silent-data-loss path — previously an oversized record was accepted at write
+time, then treated as corruption by `wal.Replay` on the next restart, truncating it and every
+record written after it.
 
-- The `totalLen` bound: `1 + 4 + MAX_KEY_LENGTH + 4 + MAX_VALUE_LENGTH + 4` — a garbage length
+`wal.Replay` still enforces the same bounds independently while parsing a possibly-corrupt log,
+against the *encoded* key length (user key + the 8-byte internal-key trailer, `maxEncodedKeyLen`
+in `wal/wal_types.go`) rather than the raw user key length:
+
+- The `totalLen` bound: `4 + maxEncodedKeyLen + 4 + MAX_VALUE_LENGTH + 4` — a garbage length
   field would otherwise cause a multi-gigabyte allocation.
 - The per-field check on `keyLength` / `valueLength` after parsing.
 
-Either failing triggers truncate-to-last-good-record. So today they're really "how large a
-record can be before replay treats the log as corrupt" — which means writing a value larger than
-1 MB would make it un-replayable. Worth enforcing at the write path.
+Either failing triggers truncate-to-last-good-record (see [wal.md](wal.md)). This layer still
+matters even with write-time validation, since it's also what protects against a corrupted length
+field that has nothing to do with any real write hcdb ever made.
 
 ## Memtable
 
@@ -141,12 +140,15 @@ is the main weakness — small tables waste memory, tables above 100 000 keys si
 ## Cache
 
 ```go
-DEFAULT_BLOCK_CACHE_ENTRIES = 256
+DEFAULT_BLOCK_CACHE_ENTRIES = 256 // total across shards
+DEFAULT_CACHE_SHARD_COUNT   = 16  // DEFAULT_BLOCK_CACHE_ENTRIES / this per shard
 ```
 
-Number of decoded blocks the shared `cache.LRU` holds (see [cache.md](cache.md)) — entries, not
-bytes. At `DEFAULT_BLOCK_SIZE` (4 KB) that's roughly 1 MB of decoded blocks. An unvalidated
-starting guess, not tuned against a real hit-rate measurement yet.
+Total decoded blocks the shared cache holds (see [cache.md](cache.md)) — entries, not bytes. At
+`DEFAULT_BLOCK_SIZE` (4 KB) that's roughly 1 MB of decoded blocks. `db.Open` now constructs a
+`cache.ShardedLRU` with `DEFAULT_CACHE_SHARD_COUNT` shards of `DEFAULT_BLOCK_CACHE_ENTRIES /
+DEFAULT_CACHE_SHARD_COUNT` entries each, not a single `cache.LRU`. Both are unvalidated starting
+guesses, not tuned against a real hit-rate measurement yet.
 
 ## `Config` struct
 
@@ -170,9 +172,8 @@ callers dereference at the call site.
 
 | Constant | Value | Owner | What it controls |
 |---|---|---|---|
-| `OP_PUT` / `OP_DELETE` | 0 / 1 | all | record type, tombstone marker |
-| `MAX_KEY_LENGTH` | 1 KB | wal | replay sanity bound |
-| `MAX_VALUE_LENGTH` | 1 MB | wal | replay sanity bound |
+| `MAX_KEY_LENGTH` | 1 KB | db, wal | write-time rejection + replay sanity bound |
+| `MAX_VALUE_LENGTH` | 1 MB | db, wal | write-time rejection + replay sanity bound |
 | `DEFAULT_BTREE_DEGREE` | 32 | memtable | B-tree fanout |
 | `DEFAULT_MEMTABLE_FLUSH_SIZE` | 4 MB | db | when to flush to disk |
 | `DEFAULT_BLOCK_SIZE` | 4 KB | sstable | disk I/O unit, index granularity |
@@ -181,9 +182,11 @@ callers dereference at the call site.
 | `DEFAULT_SIMILAR_SIZE_RATIO` | 2 | compaction | size-tier width |
 | `DEFAULT_BLOOM_FALSE_POSITIVE_RATE` | 0.01 | bloomfilter | filter accuracy vs. size |
 | `DEFAULT_BLOOM_EXPECTED_KEYS` | 100 000 | bloomfilter | filter sizing per SSTable |
-| `DEFAULT_BLOCK_CACHE_ENTRIES` | 256 | cache | shared decoded-block cache size |
+| `DEFAULT_BLOCK_CACHE_ENTRIES` | 256 | cache | shared decoded-block cache size (all shards) |
+| `DEFAULT_CACHE_SHARD_COUNT` | 16 | cache | number of `cache.LRU` shards |
 
 ## Related
 
 - [db.md](db.md) · [wal.md](wal.md) · [memtable.md](memtable.md) · [sstable.md](sstable.md) ·
-  [compaction.md](compaction.md) · [bloomfilter.md](bloomfilter.md) · [cache.md](cache.md)
+  [compaction.md](compaction.md) · [bloomfilter.md](bloomfilter.md) · [cache.md](cache.md) ·
+  [resp.md](resp.md) · [server.md](server.md) · [deployment.md](deployment.md)

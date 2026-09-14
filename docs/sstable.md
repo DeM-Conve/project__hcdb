@@ -55,14 +55,17 @@ the only recency information the system has (see *Ordering* below).
 ### BlockEntry
 
 ```
-+--------+---------+---------+-------+--------+
-| Type   | keyLen  | valLen  | key   | value  |
-| 1 byte | 4 bytes | 4 bytes | bytes | bytes  |
-+--------+---------+---------+-------+--------+
++---------+---------+---------------+--------+
+| keyLen  | valLen  | internal key  | value  |
+| 4 bytes | 4 bytes | bytes         | bytes  |
++---------+---------+---------------+--------+
 ```
 
-`Type` is `OP_PUT` or `OP_DELETE` — tombstones are stored on disk exactly like values, just
-with the delete flag and an empty value.
+`key` is an **encoded internal key**: the user key plus an 8-byte trailer packing a sequence
+number and a kind (`base.InternalKeyKindSet` / `base.InternalKeyKindDelete`), so `keyLen` is
+`len(userKey) + 8`. There is no separate type byte any more — put vs. delete lives entirely in
+the trailer, and tombstones are stored on disk exactly like values, just with an empty value and
+the delete kind. See `internal/base/internal.go`.
 
 `decodeBlock` verifies the CRC before parsing anything, and returns `"block CRC mismatch"` on
 failure. Unlike the WAL, there is no truncate-and-recover — an SSTable is not append-only, so a
@@ -77,10 +80,14 @@ corrupt block is a hard read error that propagates up.
 +---------+-------+---------+---------+
 ```
 
-One entry per block, holding that block's **first key**, its byte offset in the file, and its
-byte length. So the index is a *sparse* index — one key per ~4 KB block, not per record. That's
-the whole point: a 100 MB SSTable needs only ~25 000 index entries, which fits comfortably in
-RAM, whereas a dense index would not.
+One entry per block, holding that block's **first internal key** (user key + 8-byte trailer,
+so `keyLen` covers the trailer too), its byte offset in the file, and its byte length. So the
+index is a *sparse* index — one key per ~4 KB block, not per record. That's the whole point: a
+100 MB SSTable needs only ~25 000 index entries, which fits comfortably in RAM, whereas a dense
+index would not.
+
+Ordering is `base.InternalCompare`: user key ascending, then sequence number descending — so a
+user key with several versions spanning a block boundary still sorts correctly, newest first.
 
 ```
 Block 1: [a, b, c]        Index:  [a → offset,len]
@@ -139,8 +146,9 @@ type blockCollector struct {
 }
 ```
 
-`add` bumps `sizeEstimate` by `len(key) + len(value) + 9` — the 9 being the per-entry framing
-(`type 1 + keyLen 4 + valLen 4`). It's an estimate, not exact: it ignores the block's own 4-byte
+`add` bumps `sizeEstimate` by `len(key) + len(value) + 8` — the 8 being the per-entry framing
+(`keyLen 4 + valLen 4`; `key` is already the full encoded internal key, trailer included, so no
+separate accounting is needed for it). It's an estimate, not exact: it ignores the block's own 4-byte
 `numEntries` header and 4-byte CRC, so real blocks run ~8 bytes over. Also, the size check
 happens *after* adding, so a block can overshoot 4 KB by one entry's worth. Neither matters —
 4 KB is a target, not a constraint.
@@ -201,21 +209,21 @@ Reads the directory, sorts entries by name **descending** (`Name()[i] > Name()[j
 each one. Since names are `UnixNano` timestamps, descending name order = **newest first**. That
 slice order *is* the recency ordering the whole read path depends on.
 
-### `Lookup(key)` (`sstable.go`)
+### `Lookup(userKey, snapshot)` (`sstable.go`)
 
 ```
-key
- └─ bloom.MightContain(key)?
-      ├─ no  → KEY_ABSENT              (zero disk I/O — the fast path)
-      └─ yes → searchIndex(index, key) → blockIdx
-                 ├─ blockIdx < 0 → KEY_ABSENT   (key sorts before every block's first key)
-                 └─ readBlock(offset, length) → decodeBlock → findInBlockLookup
+userKey
+ └─ bloom.MightContain(userKey)?          (bloom indexes user keys, not internal keys)
+      ├─ no  → KEY_ABSENT                  (zero disk I/O — the fast path)
+      └─ yes → NewIterator(sst, userKey, snapshot) → seek to newest version visible at snapshot
+                 ├─ not valid, or landed on a different user key → KEY_ABSENT
+                 └─ found → KEY_DELETED (tombstone) or KEY_FOUND (value)
 ```
 
 Returns a three-valued `base.KEY_LOOKUP_ENUM`, shared with the memtable:
 
 ```go
-KEY_ABSENT   // not in this table — caller should keep searching older tables
+KEY_ABSENT   // not in this table (at this snapshot) — caller should keep searching older tables
 KEY_FOUND    // found, value returned
 KEY_DELETED  // tombstone — the key IS deleted, caller must STOP searching
 ```
@@ -223,28 +231,35 @@ KEY_DELETED  // tombstone — the key IS deleted, caller must STOP searching
 Distinguishing `KEY_DELETED` from `KEY_ABSENT` is essential to correctness. Collapsing them
 would make a deleted key resurrect from an older SSTable.
 
-`Get` is a thin `bool`-returning wrapper over `Lookup` used for simpler call sites.
+`Lookup` no longer does its own `searchIndex` call directly — it delegates the seek to
+`Iterator` (see below). The reason: a **search key** for `userKey` sorts *before* every real
+version of that user key, so when `userKey` happens to be exactly a block's recorded first key,
+`searchIndex` alone would point at the *previous* block. `Iterator` walks forward across block
+boundaries and lands on the correct entry regardless, which also handles a user key whose
+versions straddle two blocks.
 
 ### `searchIndex` (`index.go`)
 
-Binary search for the **rightmost** index entry with `FirstKey <= key`:
+Binary search over **internal keys** for the rightmost index entry whose `FirstKey` compares
+`<=` the target (`base.InternalCompare`, user key ascending then sequence number descending):
 
 ```go
-if bytes.Compare(index[mid].FirstKey, key) <= 0 {
+if base.InternalCompare(bytes.Compare, firstKey, target) <= 0 {
     result = mid; lo = mid + 1     // candidate; try further right
 } else {
     hi = mid - 1
 }
 ```
 
-Index `[a, d, g]`, search `"e"` → returns block 2 (`d`), because `e` sorts between `d` and `g`
-so it can only live in the block starting at `d`. Returns `-1` when `key` is smaller than every
-first key — the key cannot exist in the file at all.
+Index `[a, d, g]`, search for an internal key on user key `"e"` → returns block 2 (`d`), because
+`e` sorts between `d` and `g` so it can only live in the block starting at `d`. Returns `-1` when
+the target is smaller than every first key — it cannot exist in the file at all.
 
-**Exactly one block is read.** Because the file is globally sorted, if the key isn't in the
-block that `searchIndex` picked, it isn't in the file. `findInBlockLookup` then does a *linear*
-scan of that block's entries — fine, since a 4 KB block holds only tens to hundreds of records
-and it's already all in memory.
+`searchIndex` alone only picks a **candidate starting block** — it is not the final word on
+whether the key is in that block, because a *search key* (used to seek to "the newest version of
+this user key") sorts before every real version of that key, including one that happens to be a
+block's own first key. `Iterator` (below) is what actually walks forward from that candidate
+block and lands on the right entry; `Lookup` no longer does a standalone single-block scan.
 
 ### `BlockIterator` (`block_iterator.go`)
 
@@ -253,16 +268,33 @@ key order. Used only by compaction. It's a full materialisation, not a streaming
 despite the name, it loads the entire table into memory at once. That's the dominant memory
 cost of compaction.
 
-### `Iterator` (`iterator.go`) — one source in the range-scan merge
+### `Iterator` (`iterator.go`) — the lazy cursor behind both `Lookup` and range scans
 
-Unlike `BlockIterator` above (which materializes a whole table for compaction), `Iterator` is
-the **lazy**, streaming per-SSTable cursor used by `db.Scan`'s k-way merge
-(see [db.md](db.md)). `NewIterator(sst, lowerBound)` binary-searches `sst.index` the same way
-`Lookup` does to find the starting block, then walks forward — decoding one block at a time via
-`readBlock` (which transparently benefits from the block cache, see [cache.md](cache.md)) — and
-crossing into the next block only once the current one is exhausted. It never loads more than
-one decoded block into memory at a time, which is the point: an SSTable can be far larger than
-RAM, so a range scan can't afford `BlockIterator`'s eager whole-table load.
+```go
+func NewIterator(sst *SSTable, lowerBound []byte, snapshot base.SeqNum) (*Iterator, error)
+```
+
+`NewIterator` builds a search key for `lowerBound` at `snapshot` (`EncodeSearchKeyAt`), uses
+`searchIndex` to pick a starting block, loads it (through `readBlock`, so it transparently
+benefits from the block cache — see [cache.md](cache.md)), then walks forward entry-by-entry —
+crossing into the next block via `advance()` once the current one is exhausted — until it reaches
+an entry at or after the seek key. A second pass, `skipInvisible`, then skips forward past any
+entry whose sequence number is newer than `snapshot`; this has to be a separate, ongoing check
+(not just applied once at the seek point) because walking forward crosses into other user keys
+whose *own* newest version may itself be too new.
+
+Two call sites, both benefiting from the same laziness — never more than one decoded block held
+in memory at a time, which matters because an SSTable can be far larger than RAM:
+
+- **`Lookup`** constructs one `Iterator` at the target user key and reads at most the position it
+  lands on — effectively still "one block read per lookup" as before, just implemented via the
+  general seek-and-filter machinery instead of a bespoke single-block linear scan.
+- **`db.Scan`**'s k-way merge (see [db.md](db.md)) holds one long-lived `Iterator` per SSTable and
+  calls `Next()` repeatedly, which is `advance()` plus `skipInvisible()`.
+
+`BlockIterator` and `Iterator` exist for different reasons and aren't interchangeable:
+`BlockIterator` eagerly loads a whole table for compaction's merge step; `Iterator` never holds
+more than one block, which is what range scans and point lookups both need.
 
 ## Known limitations
 
@@ -271,11 +303,13 @@ RAM, so a range scan can't afford `BlockIterator`'s eager whole-table load.
   ([cache.md](cache.md)) now absorbs most of this cost for repeated access to the same block, but
   a cold miss still pays it.
 - **`BlockIterator` loads whole tables into RAM**, so compaction memory scales with the size of
-  the group being merged. `sstable.Iterator` (used by range scans) does not have this problem —
-  the two exist for different reasons and aren't interchangeable.
-- **The block cache is unbounded across concurrent scans.** `Iterator` doesn't pin blocks it has
-  read — if a compaction deletes the underlying file mid-scan, a subsequent `readBlock` call on
-  that iterator will fail. No reference counting exists yet (see [db.md](db.md)).
+  the group being merged. `sstable.Iterator` (used by both `Lookup` and range scans) does not
+  have this problem.
+- **No reference counting protects a file an `Iterator` is still reading.** If `compaction.Compact`
+  deletes the underlying SSTable file while a `db.Scan` iterator is mid-scan over it, that
+  iterator's next `readBlock` call fails — confirmed still true: neither `sstable.Iterator` nor
+  `compaction.compact.go`'s `os.Remove` step have any notion of an open reader to wait for (see
+  [db.md](db.md)).
 - **`indexSize` duplicates `encodeIndex`'s layout knowledge.** Any change to the index encoding
   must be mirrored in both or every file becomes unreadable.
 - **`encodeFooter` / `readFooter` are dead code** (the pre-bloom 12-byte footer).

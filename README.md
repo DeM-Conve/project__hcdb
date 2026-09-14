@@ -2,28 +2,37 @@
 
 **hcdb** is an in-progress LSM-style embedded key-value engine in Go: WAL,
 memtable, SSTables with a block-based layout, size-tiered compaction, atomic
-crash-safe SSTable installs, a shared LRU block cache, and range scans via a
-k-way merging iterator - the same architectural pillars as LevelDB and RocksDB.
-It is under active development; the sections below document how it works today
-and what is still on the roadmap toward production-grade behavior. For a
-per-package deep dive, see [docs/](docs/).
+crash-safe SSTable installs, a shared sharded LRU block cache, MVCC snapshots
+backed by internal-key sequence numbers, range scans via a k-way merging
+iterator, and a RESP-speaking TCP server so any Redis client can drive it
+directly - the same architectural pillars as LevelDB and RocksDB, plus a wire
+protocol on top. It is under active development; the sections below document
+how it works today and what is still on the roadmap toward production-grade
+behavior. For a per-package deep dive, see [docs/](docs/).
 
 ---
 
 ## Project Structure
 
-- `main.go` — small demo / entrypoint
+- `main.go` — small demo / entrypoint (library usage, no network server)
 - `go.mod`, `go.sum` — Go module (`github.com/hchauhan7816/hcdb`)
-- `Dockerfile`, `docker-compose.yml` — container image for the demo, optional compose wiring
+- `Dockerfile`, `docker-compose.yml`, `.env.example`, `.dockerignore` — container image and
+  compose wiring for `cmd/hcdb-server` (see [docs/deployment.md](docs/deployment.md))
 - `config/` — defaults and DB config struct
+- `internal/base/` — internal key format (user key + sequence number + kind), MVCC comparison
+  rules, and the snapshot `Watermark` compaction reads to know what's still in use
 - `wal/` — append-only log, CRC32, replay, truncation, sync policy
-- `memtable/` — in-memory sorted B-tree (`google/btree`), RWMutex, range iterator
+- `memtable/` — in-memory sorted B-tree (`google/btree`) of internal keys, RWMutex, range iterator
 - `sstable/` — blocks, sparse index, footer, atomic install, read/write/iterator paths
 - `bloomfilter/` — Bloom filter types, hashing, serialization, set ops
-- `compaction/` — size-tiered grouping, merge, file lifecycle
-- `cache/` — shared LRU block cache (hashmap + doubly-linked list)
+- `compaction/` — size-tiered grouping, snapshot-aware merge, file lifecycle
+- `cache/` — shared sharded LRU block cache (hashmap + doubly-linked list per shard)
+- `resp/` — RESP wire protocol: parsing and serializing the five RESP value types
+- `server/` — RESP-speaking TCP server dispatching SET/GET/DEL/SCAN/PING onto `db.DB`
+- `cmd/hcdb-server/` — server entrypoint, configured via `HCDB_ADDR`/`HCDB_DATA_DIR`
 - `faultinjection/` — torn-write simulation used by crash-recovery tests
-- `db/` — `Open`/`Close`, `Get`/`Put`/`Delete`/`ForceFlush`, `Scan` (k-way merge)
+- `db/` — `Open`/`Close`, `Get`/`Put`/`Delete`/`ForceFlush`, `GetSnapshot`/`ReleaseSnapshot`,
+  `GetAt`/`ScanAt` (k-way merge), `Get`/`Scan` as thin latest-version wrappers over them
 - `bench/` — Go benchmarks including scaled miss analysis
 - `docs/` — per-package developer guides, one file per package above
 
@@ -46,6 +55,30 @@ go test ./bench/ -bench=BenchmarkGetMissScaled -benchtime=3s -benchmem
 go test ./... -race
 ```
 
+### Running as a server
+
+`main.go` is a library demo; to actually talk to hcdb over the network, run
+`cmd/hcdb-server`, which speaks RESP (the Redis wire protocol — see
+[docs/resp.md](docs/resp.md) and [docs/server.md](docs/server.md)):
+
+```bash
+go run ./cmd/hcdb-server
+redis-cli -p 6380 SET foo bar
+redis-cli -p 6380 GET foo
+redis-cli -p 6380 SCAN a z
+```
+
+Or with Docker, which also runs a RESP-aware healthcheck (see
+[docs/deployment.md](docs/deployment.md)):
+
+```bash
+docker compose up --build
+docker compose --profile tools run --rm redis-cli SET foo bar
+```
+
+`HCDB_ADDR` (default `:6380`) and `HCDB_DATA_DIR` (default `assets`, or `/data` inside the
+container) configure the listen address and storage location without a rebuild.
+
 ---
 
 ## Architecture
@@ -56,25 +89,28 @@ Write Path
   Put(key, value)
        │
        ▼
+  encodeNextKey: user key + fresh sequence number + kind → internal key
+       │
+       ▼
   WAL (append-only, CRC32 protected)          ← crash safety
        │
        ▼
-  Memtable (B-tree, sorted, in-memory)        ← fast writes
+  Memtable (B-tree of internal keys, sorted, in-memory)   ← fast writes, versions kept, not overwritten
        │
-       │  when size >= 4MB
+       │  when size >= 4MB (checked on both Put and Delete)
        ▼
   SSTable (immutable, sorted, on disk)        ← durable storage, installed atomically
        │
        │  when SSTable count >= 4
        ▼
-  Compaction (size-tiered merge)              ← reclaim space, remove tombstones
+  Compaction (size-tiered merge, keeps every version an active snapshot might still need)
 
 Read Path
 ─────────
-  Get(key)
+  Get(key) = GetAt(key, latest)
        │
        ▼
-  Memtable lookup  ──── found? → return value
+  Memtable lookup (newest version visible at the snapshot) ── found? → return value
        │
        │ not found
        ▼
@@ -84,21 +120,33 @@ Read Path
   Bloom check → maybe absent? skip SSTable
        │
        ▼
-  Binary search on index → read block (through shared cache) → scan block entries
+  Seek on index → read block (through shared sharded cache) → newest visible version wins,
+  a tombstone at any level stops the search
 
 Range Scan
 ──────────
-  Scan(lowerBound, upperBound)
+  Scan(lowerBound, upperBound) = ScanAt(lowerBound, upperBound, latest)
        │
        ▼
-  k-way merge over memtable + every SSTable (min-heap)
+  k-way merge over memtable + every SSTable (min-heap), each source pre-filtered to the snapshot
        │
        ▼
   newest-wins on duplicate keys, tombstones hidden → sorted results
+
+Snapshots
+─────────
+  GetSnapshot() pins the current sequence number (db.watermark.Begin) ── ReleaseSnapshot() unpins it
+       │
+       ▼
+  GetAt/ScanAt with that sequence number see a consistent, unmoving view of the database
+  even as later writes and flushes continue; compaction keeps whatever a pinned snapshot
+  still needs (see Compaction above) until it's released
 ```
 
 The full mechanics of every path — every function involved, every ordering guarantee, and why
-each step is ordered the way it is — are in [docs/db.md](docs/db.md).
+each step is ordered the way it is — are in [docs/db.md](docs/db.md). The network-facing layer
+built on top of this (RESP wire protocol + TCP server) is in
+[docs/resp.md](docs/resp.md) and [docs/server.md](docs/server.md).
 
 ---
 
@@ -113,7 +161,7 @@ each step is ordered the way it is — are in [docs/db.md](docs/db.md).
 │  ...                                │
 ├─────────────────────────────────────┤
 │  Index Section                      │
-│  (firstKey, offset, length) × N     │
+│  (firstInternalKey, offset, len)×N  │
 ├─────────────────────────────────────┤
 │  Bloom Section                      │
 │  bloomLen (4B) | bloomBytes (N bytes) │
@@ -132,27 +180,30 @@ Written directly to a `.tmp` file, then atomically renamed into place once compl
 ```
 ┌────────────────────────────────────────────────────────────┐
 │ numEntries (4 bytes)                                       │
-│ entry 1: type(1) | keyLen(4) | valLen(4) | key | value    │
+│ entry 1: keyLen(4) | valLen(4) | internal key | value      │
 │ entry 2: ...                                               │
 │ ...                                                        │
 │ CRC32 checksum (4 bytes)                                   │
 └────────────────────────────────────────────────────────────┘
 ```
 
-Each block is ~4KB — aligned with OS page size. Small enough for I/O efficiency,
-large enough to amortize index overhead.
+`internal key` = user key + an 8-byte trailer packing a sequence number and a kind (put/delete) —
+there is no separate type byte; put vs. delete lives entirely in that trailer. Each block is
+~4KB — aligned with OS page size. Small enough for I/O efficiency, large enough to amortize
+index overhead.
 
 ### WAL Entry Layout
 
 ```
-┌──────────────────────────────────────────────────────────────────────┐
-│ totalLength(4B) | type(1) | keyLen(4) | valLen(4) | key | val | CRC32(4) │
-└──────────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────┐
+│ totalLength(4B) | keyLen(4B) | valLen(4B) | internal key | val | CRC32(4) │
+└────────────────────────────────────────────────────────────────┘
 ```
 
 CRC32 on every WAL entry. A corrupted tail (incomplete write on crash)
 is truncated cleanly on replay — the DB opens successfully with the last
-clean state intact.
+clean state intact. The key is the same encoded internal key stored everywhere else, so replay
+restores the original sequence numbers instead of reassigning new ones.
 
 Exact byte layouts, field sizes, and the reasoning behind each design choice are in
 [docs/sstable.md](docs/sstable.md) and [docs/wal.md](docs/wal.md).
@@ -221,6 +272,17 @@ deliberate **durability vs throughput** trade-off—similar in spirit to MySQL�
 higher sustained write rates. Sync-on-every-write would make `Put` fully durable
 on every ack but is roughly an order of magnitude slower in typical setups.
 
+### Why MVCC via internal-key sequence numbers, not copy-on-write snapshots
+
+Every write is stamped with a monotonically increasing sequence number and stored as a distinct
+internal key rather than overwriting the previous version in place (`internal/base`). A snapshot
+is then just a saved sequence number: `GetSnapshot` pins one, and any `GetAt`/`ScanAt` call at
+that number sees exactly the versions that existed at that instant, no matter what's written
+afterward. The alternative — copying or versioning entire data structures per snapshot — would be
+far more expensive; this design gets snapshot isolation almost for free, at the cost that a long-
+lived snapshot keeps old versions alive until compaction can prove they're no longer needed (see
+[docs/db.md](docs/db.md) and [docs/compaction.md](docs/compaction.md)).
+
 ---
 
 ## Benchmarks
@@ -278,9 +340,9 @@ allocations, it's time: `WalAppend` + `MemtablePut` combined cost under 750 ns, 
 costs ~36,800 ns. On real disk, that gap is dominated by the periodic `fsync` inside
 `wal.Sync()` (every `DEFAULT_SYNC_THRESHOLD` writes, see [docs/wal.md](docs/wal.md)) and,
 whenever a flush is triggered, `sstable.Flush`'s own `fsync` plus its atomic install
-(see [docs/sstable.md](docs/sstable.md)) — not allocation or GC pressure. `flushMemtable` still
-runs synchronously inside `Put` (see Known Limitations), so any write that crosses the flush
-threshold pays that full cost before returning.
+(see [docs/sstable.md](docs/sstable.md)) — not allocation or GC pressure. `flushMemtableLocked`
+still runs synchronously inside `Put`/`Delete` (see Known Limitations), so any write that crosses
+the flush threshold pays that full cost before returning.
 
 ---
 
@@ -330,11 +392,20 @@ types — memtable and SSTable — that otherwise know nothing about each other.
 [docs/db.md](docs/db.md).
 
 **A cache doesn't need to be clever to help enormously.**
-The block cache here is a plain single-threaded LRU — hashmap plus doubly-linked
-list, no sharding, no scan-resistance. It still cut a repeated block read from
-~21,000ns to ~560ns (~37× faster, ~200× fewer allocations). Most of the win in
-caching comes from not redoing work at all; a smarter eviction policy is a later
-refinement, not a prerequisite. See [docs/cache.md](docs/cache.md).
+The block cache is a plain LRU — hashmap plus doubly-linked list, no scan-resistance — sharded 16
+ways with a per-shard mutex so concurrent readers on unrelated keys don't serialize on one lock.
+It still cut a repeated block read from ~21,000ns to ~560ns (~37× faster, ~200× fewer
+allocations). Most of the win in caching comes from not redoing work at all; a smarter eviction
+policy is a later refinement, not a prerequisite. See [docs/cache.md](docs/cache.md).
+
+**A sequence number turns "point in time" into a comparable value.**
+Copy-on-write or full data-structure versioning would make snapshots expensive to take. Instead,
+every write gets a monotonically increasing sequence number and its own internal key rather than
+overwriting the previous version, so a "snapshot" is just a saved integer — pin it
+(`GetSnapshot`), read through it (`GetAt`/`ScanAt`), release it (`ReleaseSnapshot`) once done. The
+same integer, tracked as a low watermark across every active snapshot, is what tells compaction
+which old versions are still off-limits to reclaim. See [docs/db.md](docs/db.md) and
+[docs/compaction.md](docs/compaction.md).
 
 ---
 
@@ -355,18 +426,18 @@ merging. A streaming k-way merge with a min-heap gives O(k log k) work and
 bounded RAM regardless of SSTable size—required before very large tables are safe.
 
 **3. Single-threaded compaction**
-Compaction runs synchronously inside `flushMemtable`. Under heavy writes this
+Compaction runs synchronously inside `flushMemtableLocked`. Under heavy writes this
 inflates tail latency. Background compaction with throttling when debt builds is
 the usual next step.
 
 **4. High allocation count on a cold block decode**
-A shared LRU block cache (`cache/`, see [docs/cache.md](docs/cache.md)) now caches decoded
-blocks by `(FilePath, offset)`, so a *repeated* read of the same block drops from ~798 allocs/op
-to ~4 (measured directly: `BenchmarkGetSSTableHit` before/after wiring — ~21,000ns/op →
+A shared, sharded LRU block cache (`cache/`, see [docs/cache.md](docs/cache.md)) now caches
+decoded blocks by `(FilePath, offset)`, so a *repeated* read of the same block drops from ~798
+allocs/op to ~4 (measured directly: `BenchmarkGetSSTableHit` before/after wiring — ~21,000ns/op →
 ~560ns/op, ~37× faster). The first, cold read of a block still pays the full decode cost — a
-buffer pool or arena would still help there, and hasn't been done. The cache itself is also not
-yet concurrency-safe and not scan-resistant (a large sequential scan evicts the whole hot working
-set) — see the cache doc's known limitations.
+buffer pool or arena would still help there, and hasn't been done. The cache is scan-resistant in
+neither the old unsharded form nor the current sharded one (a large sequential scan can still
+evict a shard's whole hot working set) — see the cache doc's known limitations.
 
 **5. Memtable writes serialize on a single mutex**
 `memtable.Put`/`Get`/`Delete` all take the same `sync.RWMutex` guarding the whole
@@ -380,18 +451,26 @@ standard answer is a lock-free skiplist (atomic CAS per node, arena-allocated) s
 concurrent writers make real progress instead of taking turns.
 
 **6. Synchronous flush blocks the writer**
-`flushMemtable` runs inline inside `Put` when the size threshold is crossed, so
-that call pays the full flush cost before returning (see Write path breakdown
-above). A production engine rotates in a fresh memtable immediately and
-flushes the full one on a background goroutine so writes never stall on it.
+`flushMemtableLocked` runs inline inside `Put`/`Delete` when the size threshold is crossed (both
+now check it, via a shared `flushIfFullLocked`), so that call pays the full flush cost before
+returning (see Write path breakdown above). A production engine rotates in a fresh memtable
+immediately and flushes the full one on a background goroutine so writes never stall on it.
 
-**7. Range scans aren't safe against concurrent compaction**
-`db.Scan` (see [docs/db.md](docs/db.md)) returns a `MergeIterator` that only holds `db.mu` long
-enough to build its initial heap — each `Next()` call afterward runs unlocked. Its underlying
-`sstable.Iterator`s hold a `FilePath` and reopen it per block; if `compaction.Compact` deletes
-that file mid-scan, the scan's next read fails. No reference counting protects a file an
-in-progress iterator is still reading. Correct for the single-threaded case; not for a scan
-running alongside a flush.
+**7. Range scans aren't safe against concurrent compaction deleting files**
+`db.Scan`/`ScanAt` (see [docs/db.md](docs/db.md)) return a `MergeIterator` that only holds
+`db.mu` long enough to build its initial heap — each `Next()` call afterward runs unlocked. Its
+underlying `sstable.Iterator`s hold a `FilePath` and reopen it per block; if `compaction.Compact`
+deletes that file mid-scan, the scan's next read fails. MVCC snapshots narrow this gap on the
+*data* side (a pinned snapshot keeps compaction from dropping versions it needs) but not on the
+*file-handle* side — nothing pins an open file against concurrent deletion, confirmed still true
+in both `sstable/iterator.go` and `compaction/compact.go`. Correct for the single-threaded case;
+not for a scan running alongside a flush.
+
+**8. `server`'s `SCAN` is not real Redis `SCAN`**
+It's a direct wrapper over `db.Scan(lowerBound, upperBound)` — two explicit bound arguments, one
+call returns every matching pair — not the cursor-based, bounded-batch incremental keyspace
+iteration real Redis implements. A client relying on real `SCAN` semantics (a cursor argument,
+`COUNT`, resuming a partial iteration) will not get them here. See [docs/server.md](docs/server.md).
 
 ---
 
@@ -400,19 +479,26 @@ running alongside a flush.
 Rough priority order for hardening and extending hcdb:
 
 1. **Bloom filter tuning + measurement** — configurable false-positive targets and explicit miss-latency impact benchmarks
-2. **Manifest / versioned metadata** — atomic *compaction* and clearer crash recovery. Partially
-   addressed: individual SSTable writes are now atomic (temp file + rename + directory fsync, see
+2. **Manifest / versioned metadata** — atomic *compaction*, O(1) sequence-number recovery on
+   restart (`db.Open` currently re-derives it by scanning every SSTable, see
+   [docs/db.md](docs/db.md)), and clearer crash recovery generally. Partially addressed:
+   individual SSTable writes are now atomic (temp file + rename + directory fsync, see
    [docs/sstable.md](docs/sstable.md)) and a specific crash window (flush-then-WAL-reset) is
    tested and proven safe (see [docs/faultinjection.md](docs/faultinjection.md)) — but there is
    still no manifest, and compaction across multiple groups still isn't atomic as a whole.
-3. **Streaming k-way merge** — bounded-memory compaction for large SSTables. Note: `db.Scan`
-   already implements a streaming k-way merge (min-heap over memtable + SSTable iterators, see
-   [docs/db.md](docs/db.md)) for *reads*; compaction's `BlockIterator` still loads whole tables
-   into RAM and hasn't been switched over to it.
+3. **Streaming k-way merge for compaction** — bounded-memory compaction for large SSTables. Note:
+   `db.Scan` already implements a streaming k-way merge (min-heap over memtable + SSTable
+   iterators, see [docs/db.md](docs/db.md)) for *reads*; compaction's `BlockIterator` still loads
+   whole tables into RAM and hasn't been switched over to it.
 4. **Leveled (or hybrid) compaction** — stronger bounds on read amplification vs today’s size-tiered baseline
 5. **Background compaction** — decouple flush latency from merge work; throttle when debt grows
-6. **Cache concurrency-safety + scan-resistance** — a single-threaded LRU block cache now exists
+6. **Cache scan-resistance** — the block cache is now sharded and mutex-protected
    (`cache/`, see [docs/cache.md](docs/cache.md)) with a measured ~37× speedup on repeated block
-   reads, but it has no mutex and no defense against a sequential scan evicting the whole hot
-   working set — sharding or a CLOCK-Pro-style algorithm is the natural next step.
-7. **Snapshots / MVCC** — basis for richer isolation and transactional semantics
+   reads, but still has no defense against a sequential scan evicting a shard's whole hot working
+   set — a CLOCK-Pro-style algorithm is the natural next step.
+7. **File reference counting for range scans** — pin an SSTable's file open for as long as an
+   in-progress `Iterator` holds it, closing the last gap noted in Known Limitations item 7, now
+   that MVCC snapshots already protect the data those files hold.
+8. **Real cursor-based `SCAN`** in `server/` — bounded-batch, resumable iteration instead of the
+   current one-shot range scan (see Known Limitations item 8), plus authentication and
+   transactions (`MULTI`/`EXEC`) if hcdb's RESP surface grows further.

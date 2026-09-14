@@ -27,10 +27,10 @@ amplification, since overlapping key ranges can exist across many tables simulta
 
 ## Trigger
 
-Called at the end of `db.flushMemtable`, while `db.mu` is held:
+Called at the end of `db.flushMemtableLocked`, while `db.mu` is held:
 
 ```go
-compacted, err := compaction.Compact(db.sstables, db.conf.SSTDir)
+compacted, err := compaction.Compact(db.sstables, db.conf.SSTDir, db.watermark.Floor())
 db.sstables = compacted
 ```
 
@@ -45,6 +45,11 @@ if len(tables) < config.DEFAULT_COMPACTION_THRESHOLD {
     return tables, nil
 }
 ```
+
+`floor` is `db.watermark.Floor()` — the oldest sequence number any snapshot obtained via
+`db.GetSnapshot` still has pinned (`base.SeqNumMax` when nothing is pinned). It flows straight
+through into `mergeIterators` (Step 2) and is the only thing standing between size-tiered
+compaction and MVCC correctness: see below.
 
 ## Step 1 — group by similar size (`group_by_similar_size.go`)
 
@@ -92,43 +97,63 @@ filePath := fmt.Sprintf("%s/%d.sst", dirPath, time.Now().UnixNano())
 return sstable.WriteSSTableFromBlockEntries(filePath, merged)
 ```
 
-### `mergeIterators` — newest wins
+### `mergeIterators(iterators, floor)` — newest wins, but keeps what snapshots still need
 
 ```go
-seen := make(map[string]bool)
-for _, it := range iterators {          // iterators are in newest-first order
+keptAtOrBelowFloor := make(map[string]bool)
+for _, it := range iterators {                 // iterators are in newest-first order
     for _, entry := range it.Entries {
-        if seen[key] { continue }        // an earlier (newer) table already supplied this key
-        seen[key] = true
+        ik := base.DecodeInternalKey(entry.Key)
+        key := string(ik.UserKey)
+
+        if keptAtOrBelowFloor[key] { continue } // an older duplicate no snapshot can still reach
         result = append(result, entry)
+        if ik.SeqNum() <= floor {
+            keptAtOrBelowFloor[key] = true
+        }
     }
 }
 sstable.SortEntries(result)
 ```
 
-Conflict resolution is purely positional: **`tables[0]` is the newest, so it wins ties.** The
-first time a key is seen it's kept; every later (older) occurrence is dropped. That ordering
-comes all the way from `sstable.OpenAllInDir`, which sorts filenames — `UnixNano` timestamps —
-descending, and from `db.flushMemtable` prepending each new table to the front of the slice.
+This is the MVCC-aware replacement for the old unconditional "keep only the newest version"
+rule. `floor` is the oldest sequence number any active `db.GetSnapshot` snapshot still has
+pinned (`base.Watermark.Floor`, `base.SeqNumMax` when nothing is pinned). For each user key,
+every version **above** `floor` is kept unconditionally — some snapshot between `floor` and now
+might need any one of them, and `Floor()` only reports the minimum pinned value, not the full set
+of what's pinned. Once one version **at or below** `floor` has been kept, every older duplicate of
+that same key is provably unreachable by any snapshot (the oldest surviving snapshot can't see
+past `floor`, and this version already satisfies it) and gets dropped.
+
+With no active snapshot, `floor` is `base.SeqNumMax`, so the very first (newest) occurrence of
+every key always qualifies as "at or below floor" and the rule collapses back to the original
+keep-only-the-newest behavior.
+
+Conflict resolution is still purely positional beneath that: **`tables[0]` is the newest, so its
+entries are considered first.** That ordering comes all the way from `sstable.OpenAllInDir`,
+which sorts filenames — `UnixNano` timestamps — descending, and from `db.flushMemtableLocked`
+prepending each new table to the front of the slice.
 
 Despite the comment calling it a k-way merge, it isn't one: it concatenates all entries and
 then does a single `sort.Slice` at the end. Correct, but O(N log N) instead of the O(N log k)
 a real heap-based merge would give, and it holds every entry from every table in memory at once.
 
-### Tombstones are deliberately preserved
+### Tombstones are always kept, floor or no floor
 
-The code comments this explicitly, and it's the subtlest correctness point in the package:
+Regardless of `floor`, a tombstone is never dropped just for being "at or below floor" — the
+code comments this explicitly, and it's the subtlest correctness point in the package:
 
-> Tombstones are preserved in compacted output intentionally. It is only safe to drop a
-> tombstone when we are certain no older SSTable at any level can still contain the key.
-> Without a manifest tracking which files have been fully merged, we cannot guarantee this.
-> Premature tombstone removal = deleted keys resurrect from older SSTables.
+> Tombstones are always kept regardless of floor — dropping one requires knowing no older
+> SSTable still holds the key, which needs a manifest we don't have. Drop one early and a
+> deleted key can resurrect.
 
 Concretely: table A (new) has `tombstone(k)`, table C (old, not in this group) still has
 `k → "v"`. Drop the tombstone while merging A, and a later `Get(k)` falls through to C and
 returns `"v"` — a deleted key comes back to life. Tombstones can only be discarded during a
 compaction that includes the *oldest* table containing the key, and there's no bookkeeping here
-to establish that. So they accumulate. Correct, but space is never reclaimed from deletes.
+to establish that. So they accumulate — every tombstone still ends up in `result` via the same
+loop, it just never gets the chance to be treated as droppable regardless of `floor`. Correct,
+but space is never reclaimed from deletes.
 
 ## Step 3 — delete the merged-away files (`compact.go`)
 
@@ -152,12 +177,12 @@ fixed by it, not the ordering argument above.
 ## Full flow
 
 ```
-flushMemtable
-   └─ Compact(tables, dir)
+flushMemtableLocked
+   └─ Compact(tables, dir, watermark.Floor())
         ├─ len < 4?  → return unchanged
         ├─ groupBySimilarSize     → [[t0,t3], [t1], [t2,t4,t5]]
         ├─ per group of 2+:
-        │     NewBlockIterator ×n → mergeIterators (newest wins) → SortEntries
+        │     NewBlockIterator ×n → mergeIterators(floor) → SortEntries
         │     → WriteSSTableFromBlockEntries → new <UnixNano>.sst  (fsync'd)
         ├─ singleton groups pass through
         └─ os.Remove every input file that was merged
@@ -177,9 +202,16 @@ flushMemtable
 - **Fully synchronous.** Compaction runs while `db.mu` is held, so all reads and writes stall
   for its entire duration. Real engines do this in the background.
 - **Whole tables are loaded into RAM.** `BlockIterator` materialises every entry of every table
-  in the group; memory scales with total group size, not with a merge window.
+  in the group; memory scales with total group size, not with a merge window. Keeping every
+  version above `floor` (not just the newest) means a workload with many live snapshots can make
+  a compacted table meaningfully larger than the old "one version per key" output — more data
+  held in RAM during the merge and more disk written per compaction.
 - **Not a streaming k-way merge** — concatenate-then-sort, O(N log N).
-- **Tombstones are never reclaimed**, so deleted data occupies disk forever.
+- **Tombstones are never reclaimed**, so deleted data occupies disk forever, independent of
+  `floor` — see *Tombstones are always kept* above.
+- **`Watermark.Floor` is a linear scan over active snapshots.** Fine at the scale hcdb expects
+  (few concurrent snapshots), but doesn't scale the way a min-heap-based tracker (e.g. BadgerDB's)
+  would — see [internal `base.Watermark`](db.md#snapshots-and-getat--scanat).
 - **No manifest.** Recency is inferred from filenames and slice position. A manifest recording
   levels/generations would fix the ordering bug and enable safe tombstone dropping.
 - **Partial failure across groups isn't atomic.** An error mid-way returns `nil`, having possibly
