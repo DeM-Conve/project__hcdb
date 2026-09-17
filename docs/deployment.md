@@ -72,7 +72,7 @@ protocol the server actually understands: pipe a literal, hand-encoded RESP `PIN
 (`*1\r\n$4\r\nPING\r\n` — see [resp.md](resp.md) for the framing) through `nc` and check for the
 literal `PONG` reply. `server`'s `PING` handler never touches the database (see
 [server.md](server.md)), so this also correctly reports healthy even while a flush or compaction
-has the storage engine's write path busy — it's testing "the RESP server is accepting and
+has the database's write path busy — it's testing "the RESP server is accepting and
 answering commands," which is exactly what a healthcheck should mean here.
 
 ## `docker-compose.yml`

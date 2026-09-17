@@ -1,14 +1,51 @@
-# HCDB — A Persistent Key-Value Store in Go
+# HCDB — A Durable LSM-Tree Database, Speaking the Redis Protocol
 
-**HCDB** is an in-progress LSM-style embedded key-value engine in Go: WAL,
-memtable, SSTables with a block-based layout, size-tiered compaction, atomic
-crash-safe SSTable installs, a shared sharded LRU block cache, MVCC snapshots
-backed by internal-key sequence numbers, range scans via a k-way merging
-iterator, and a RESP-speaking TCP server so any Redis client can drive it
-directly - the same architectural pillars as LevelDB and RocksDB, plus a wire
-protocol on top. It is under active development; the sections below document
-how it works today and what is still on the roadmap toward production-grade
-behavior. For a per-package deep dive, see [docs/](docs/).
+**HCDB** is an LSM/SSTable-based key-value database, built the same way LevelDB and RocksDB
+are — WAL, memtable, block-based SSTables, size-tiered compaction, MVCC snapshots — but it talks
+to your application over RESP, the wire protocol Redis already speaks. Point `redis-cli`, or any
+Redis client library your stack already has, straight at it. No new driver, no new query
+language, no new mental model.
+
+The difference that matters: **HCDB doesn't lose data when the process dies.** Every write is
+WAL-logged and `fsync`'d before it's acknowledged, and every SSTable is installed atomically
+(temp file + rename + directory fsync) — so where an in-memory store trades durability for
+speed, HCDB is durable *and* fast where it counts: reads. Hot-key reads run at 209 ns/op,
+key-miss rejection at 81 ns/op, and a sharded LRU block cache turns a 21,000 ns cold SSTable
+read into a 560 ns warm one — a measured 37× speedup, on real disk, not tmpfs.
+
+It is under active development; the sections below document how it works today and what is
+still on the roadmap toward production-grade behavior. For a per-package deep dive, see
+[docs/](docs/).
+
+---
+
+## Why HCDB
+
+- **Drop-in for anything that already speaks Redis.** Native RESP support means `redis-cli` and
+  every existing Redis client library/driver works against it with zero migration.
+- **Actually durable, not "eventually persistent."** Every write goes through a WAL with `fsync`
+  *before* it's acknowledged — unlike Redis's in-memory-first, snapshot-on-top model.
+- **Crash-safety that's tested, not assumed.** A dedicated fault-injection suite simulates torn
+  writes (process dying mid-`write()`) and proves recovery reconstructs correct state.
+- **Atomic file installs, always.** Every SSTable write is temp-file + rename + directory fsync,
+  so a crash never leaves a half-written data file behind.
+- **Sub-microsecond reads on hot data.** 209 ns/op for memtable hits, 81 ns/op for key-miss
+  rejection via Bloom filters — measured on real disk (see [Benchmarks](#benchmarks)).
+- **Reads don't get slower as your data grows.** Bloom filters keep miss latency flat
+  (~90–120 ns) whether there's 1 SSTable or 20.
+- **A 37× cache speedup, independently measured.** The sharded LRU block cache turns a
+  21,000 ns cold SSTable read into a 560 ns warm one.
+- **Consistent reads without blocking writers.** MVCC snapshots via sequence-number watermarks —
+  the same mechanism LevelDB/RocksDB use for repeatable-read scans.
+- **A durability/throughput dial you control**, not one hidden behind a default — the same
+  trade-off MySQL exposes via `innodb_flush_log_at_trx_commit`.
+- **Small enough to actually read.** Every subsystem (WAL, memtable, SSTables, compaction,
+  cache, RESP layer) has its own developer doc explaining *why* it's built that way — you're not
+  trusting a black box with your data.
+
+> **Where HCDB is today:** write throughput is deliberately fsync-bound (~27k ops/sec) in favor
+> of durability over raw write speed, and there is no clustering, no manifest file yet, and only
+> a subset of the RESP command surface. See [What's Next](#whats-next) for the roadmap.
 
 ---
 

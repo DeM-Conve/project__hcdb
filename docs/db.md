@@ -488,7 +488,7 @@ Concurrency gap above.
 - **A held snapshot blocks tombstone (and superseded-version) reclamation indefinitely.** Since
   `Watermark.Floor()` is the minimum of every pinned sequence number, one long-lived
   `GetSnapshot` caller that forgets to call `ReleaseSnapshot` prevents compaction from dropping
-  anything that snapshot might still need — an unbounded resource leak from the storage engine's
+  anything that snapshot might still need — an unbounded resource leak from the database's
   point of view, not just a client-side handle leak.
 - **`maxSeqNumInTables` is an O(data) scan on every `Open`.** No manifest records the last
   sequence number, so restart has to re-derive it by reading every SSTable in full.

@@ -71,7 +71,7 @@ entrypoint that reads environment variables, opens a `db.DB`, and hands it to a 
 `wal`'s and `db`'s test files, never by production code.
 
 That means a component can be reasoned about, tested, or replaced on its own, and the rules
-that make the storage engine *correct* live in exactly one place: `db`.
+that make the database *correct* live in exactly one place: `db`.
 
 ## Where data lives
 
