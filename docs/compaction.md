@@ -209,7 +209,7 @@ flushMemtableLocked
 - **Not a streaming k-way merge** — concatenate-then-sort, O(N log N).
 - **Tombstones are never reclaimed**, so deleted data occupies disk forever, independent of
   `floor` — see *Tombstones are always kept* above.
-- **`Watermark.Floor` is a linear scan over active snapshots.** Fine at the scale hcdb expects
+- **`Watermark.Floor` is a linear scan over active snapshots.** Fine at the scale HCDB expects
   (few concurrent snapshots), but doesn't scale the way a min-heap-based tracker (e.g. BadgerDB's)
   would — see [internal `base.Watermark`](db.md#snapshots-and-getat--scanat).
 - **No manifest.** Recency is inferred from filenames and slice position. A manifest recording

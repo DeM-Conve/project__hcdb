@@ -1,4 +1,4 @@
-# Deployment — running hcdb as a server
+# Deployment — running HCDB as a server
 
 Files: `cmd/hcdb-server/main.go`, `Dockerfile`, `docker-compose.yml`, `.env.example`,
 `.dockerignore`
@@ -63,7 +63,7 @@ HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
   CMD printf '*1\r\n$4\r\nPING\r\n' | nc -w 2 127.0.0.1 6380 | grep -q PONG || exit 1
 ```
 
-hcdb speaks RESP over a raw TCP socket, not HTTP — there is no HTTP endpoint to probe. An
+HCDB speaks RESP over a raw TCP socket, not HTTP — there is no HTTP endpoint to probe. An
 HTTP-based or plain-TCP-connect healthcheck was tried first and **confirmed to report a working
 server as unhealthy**: connecting successfully (or getting a TCP-level response) doesn't tell you
 the RESP command loop is actually alive and answering correctly, and a bare HTTP client speaking
@@ -143,7 +143,7 @@ compose starts (or reuses) the `hcdb` service first if it isn't already running.
 ### Resource limits and logging
 
 `mem_limit`/`cpus` cap the container's resource use (4 GB / 2 vCPUs by default) — worth raising
-for a workload with a large working set, since hcdb's block cache and memtable both live in that
+for a workload with a large working set, since HCDB's block cache and memtable both live in that
 same memory budget (see [cache.md](cache.md), [memtable.md](memtable.md)). Logging uses the
 `json-file` driver with rotation capped at `10m` per file, 3 files kept — bounded disk use for
 container logs regardless of how long the container runs.

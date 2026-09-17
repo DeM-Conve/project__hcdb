@@ -52,7 +52,7 @@ in `wal/wal_types.go`) rather than the raw user key length:
 
 Either failing triggers truncate-to-last-good-record (see [wal.md](wal.md)). This layer still
 matters even with write-time validation, since it's also what protects against a corrupted length
-field that has nothing to do with any real write hcdb ever made.
+field that has nothing to do with any real write HCDB ever made.
 
 ## Memtable
 

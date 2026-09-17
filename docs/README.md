@@ -1,6 +1,6 @@
 # Developer Guides
 
-Internal notes on how hcdb is put together. For what the project *is*, see the
+Internal notes on how HCDB is put together. For what the project *is*, see the
 [root README](../README.md).
 
 ## Layout
@@ -57,7 +57,7 @@ package: it defines the internal-key/sequence-number/kind format and the snapsho
 and every storage-engine package that needs to encode, decode or compare a key imports it —
 but it, like `config`, imports nothing back.
 
-`cache` is a leaf like `config` — it imports nothing from hcdb — but unlike `config` it's not
+`cache` is a leaf like `config` — it imports nothing from HCDB — but unlike `config` it's not
 depended on by everyone, only by `sstable` (which holds the cache reference and calls it from
 `readBlock`) and `db` (which owns the one shared instance and constructs it in `Open`).
 

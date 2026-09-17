@@ -41,7 +41,7 @@ USER hcdb
 VOLUME ["/data"]
 EXPOSE 6380
 
-# hcdb speaks RESP, not HTTP. An HTTP or plain TCP probe would report a
+# HCDB speaks RESP, not HTTP. An HTTP or plain TCP probe would report a
 # healthy server as down: it sends a real RESP-encoded PING and requires
 # a PONG reply. nc is provided by BusyBox in the base image.
 HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \

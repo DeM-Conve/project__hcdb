@@ -4,7 +4,7 @@ Package: `resp/` — files: `resp.go`, `reader.go`, `writer.go`, `resp_test.go`
 
 ## Why it exists
 
-`server/` needs a wire format redis-cli and every other Redis client already speaks, so hcdb can
+`server/` needs a wire format redis-cli and every other Redis client already speaks, so HCDB can
 be driven with off-the-shelf tooling instead of a bespoke protocol. RESP (REdis Serialization
 Protocol) is that format: five type tags, each one a byte followed by `\r\n`-terminated text,
 with bulk data carried by an explicit length prefix rather than a delimiter. This package is
@@ -105,8 +105,8 @@ io.ReadFull(r, buf)
 return Value{Type: BulkString, Str: string(buf[:n])}, nil
 ```
 
-This is what makes the format **binary-safe**: a value hcdb stores can itself contain the bytes
-`\r\n` (any key or value can, since hcdb has no notion of "text" versus "binary" data). A
+This is what makes the format **binary-safe**: a value HCDB stores can itself contain the bytes
+`\r\n` (any key or value can, since HCDB has no notion of "text" versus "binary" data). A
 delimiter-scanning reader would stop at the first embedded `\r\n` and truncate the value.
 `TestReadBulkStringWithEmbeddedCRLF` is the regression test that exists specifically to prove
 this: reading `$6\r\nab\r\ncd\r\n` must yield the full six-byte string `"ab\r\ncd"`, not `"ab"`.
@@ -168,7 +168,7 @@ just independently.
 
 - **No streaming/incremental parse API.** `Read` returns only once a complete value (recursively,
   for arrays) has arrived; there's no way to parse a partial command and resume later without
-  blocking the calling goroutine on I/O in the meantime. Acceptable for hcdb's one-goroutine-per-
+  blocking the calling goroutine on I/O in the meantime. Acceptable for HCDB's one-goroutine-per-
   connection model (see [server.md](server.md)), where blocking is the point.
 - **No inline-command support.** Real Redis also accepts a plain text line (no `*`/`$` framing)
   as a command for interactive use; this package only implements the typed protocol.

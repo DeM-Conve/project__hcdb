@@ -1,4 +1,4 @@
-// Command hcdb-server runs hcdb as a RESP-speaking TCP server — point
+// Command hcdb-server runs HCDB as a RESP-speaking TCP server — point
 // redis-cli at it once it's up:
 //
 //	go run ./cmd/hcdb-server

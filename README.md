@@ -42,7 +42,7 @@ behavior. For a per-package deep dive, see [docs/](docs/).
 
 ```bash
 git clone https://github.com/DeM-Conve/project__hcdb
-cd hcdb
+cd project__hcdb
 go run main.go
 
 # run full benchmark suite
@@ -57,7 +57,7 @@ go test ./... -race
 
 ### Running as a server
 
-`main.go` is a library demo; to actually talk to hcdb over the network, run
+`main.go` is a library demo; to actually talk to HCDB over the network, run
 `cmd/hcdb-server`, which speaks RESP (the Redis wire protocol — see
 [docs/resp.md](docs/resp.md) and [docs/server.md](docs/server.md)):
 
@@ -476,7 +476,7 @@ iteration real Redis implements. A client relying on real `SCAN` semantics (a cu
 
 ## What's Next
 
-Rough priority order for hardening and extending hcdb:
+Rough priority order for hardening and extending HCDB:
 
 1. **Bloom filter tuning + measurement** — configurable false-positive targets and explicit miss-latency impact benchmarks
 2. **Manifest / versioned metadata** — atomic *compaction*, O(1) sequence-number recovery on
@@ -501,4 +501,4 @@ Rough priority order for hardening and extending hcdb:
    that MVCC snapshots already protect the data those files hold.
 8. **Real cursor-based `SCAN`** in `server/` — bounded-batch, resumable iteration instead of the
    current one-shot range scan (see Known Limitations item 8), plus authentication and
-   transactions (`MULTI`/`EXEC`) if hcdb's RESP surface grows further.
+   transactions (`MULTI`/`EXEC`) if HCDB's RESP surface grows further.

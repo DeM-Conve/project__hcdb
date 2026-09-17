@@ -394,7 +394,7 @@ entry and the SSTable it was also flushed to).
 `Next()` calls happen with no lock held at all. Each `sstable.Iterator` holds a `FilePath` and
 re-`os.Open`s it per block. If `compaction.Compact` runs concurrently and deletes an SSTable a
 scan is still iterating, that scan's next block read will fail. Real engines solve this with
-reference counting so a file isn't deleted while an iterator still holds it open; hcdb does not
+reference counting so a file isn't deleted while an iterator still holds it open; HCDB does not
 yet.
 
 ## `Close` / `PrintMemTable`

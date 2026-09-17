@@ -7,7 +7,7 @@ Package: `server/` — files: `types.go`, `dispatch.go`, `server.go`
 `db.DB` is a Go library, callable only from a process linked against it. `server` puts a network
 front end on top: it accepts TCP connections, parses commands off the wire with `resp.Read` (see
 [resp.md](resp.md)), maps each one to a `db.DB` call, and writes a RESP reply back. That's what
-lets `redis-cli`, or any other RESP client, talk to hcdb directly — see
+lets `redis-cli`, or any other RESP client, talk to HCDB directly — see
 [deployment.md](deployment.md) for the binary that wires this together and runs it.
 
 ## `Server` (`server.go`)
@@ -154,11 +154,11 @@ Notes worth calling out explicitly:
   it existed" primitive in `db.DB`, so this does two calls per key rather than one.
 - **`SCAN` here is *not* real Redis `SCAN`.** Real Redis `SCAN` is a cursor-based, incremental
   iteration over the entire keyspace, designed so a single call never blocks the server for long
-  and a client can resume where it left off. `doScan` is a direct wrapper over hcdb's own
+  and a client can resume where it left off. `doScan` is a direct wrapper over HCDB's own
   `database.Scan(lowerBound, upperBound)` range-scan iterator (see [db.md](db.md)) — it takes two
   explicit bound arguments, not a cursor, and returns every matching key/value pair from one call
   in a single flat array. This is a deliberate deviation from Redis semantics, not a partial
-  implementation of the real thing: hcdb has a range-scan primitive already, and exposing it
+  implementation of the real thing: HCDB has a range-scan primitive already, and exposing it
   directly over RESP was simpler and more useful for this codebase's purposes than emulating
   cursor semantics on top of it. A client expecting real `SCAN` behavior (cursor argument,
   bounded batch size, `COUNT`/`MATCH` options) will not get it here.

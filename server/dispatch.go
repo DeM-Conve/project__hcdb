@@ -77,7 +77,7 @@ func doDel(database *db.DB, args []resp.Value) resp.Value {
 }
 
 // doScan is not real Redis SCAN (cursor-based key iteration over the whole
-// keyspace) — it's a direct range scan over hcdb's own Feature 5 iterator:
+// keyspace) — it's a direct range scan over HCDB's own Feature 5 iterator:
 // SCAN lowerBound upperBound, returning every key/value pair in range as one
 // flat array. Same RESP framing either way, which is all this feature is
 // actually testing.

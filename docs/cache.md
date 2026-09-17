@@ -10,7 +10,7 @@ package exists to make the second read of a hot block free: skip the disk I/O an
 entirely, and hand back the already-decoded `[]BlockEntry` slice.
 
 Modeled on `golang/groupcache/lru` — small, canonical, well-tested — with two intentional
-narrowings: keys are `string`, not `any`, and there's no `OnEvicted` callback, since hcdb doesn't
+narrowings: keys are `string`, not `any`, and there's no `OnEvicted` callback, since HCDB doesn't
 need either yet.
 
 ## Type
@@ -88,7 +88,7 @@ entry budget is unchanged from a single unsharded LRU, just distributed. `Cacher
 `sstable.SSTable.cache` actually holds, satisfied by both `*LRU` and `*ShardedLRU` — plain `*LRU`
 is still usable directly (and is what each shard is, underneath).
 
-## Wired into hcdb
+## Wired into HCDB
 
 One shared `cache.Cacher` per `DB` (a `*ShardedLRU` in practice), not one per SSTable:
 
@@ -124,7 +124,7 @@ if sst.cache != nil {
 }
 ```
 
-The key is `FilePath + offset`, not a numeric file ID — hcdb doesn't have a numeric file ID
+The key is `FilePath + offset`, not a numeric file ID — HCDB doesn't have a numeric file ID
 system, and the file path is already unique per SSTable.
 
 ## Measured impact
@@ -146,7 +146,7 @@ is just `LRU.Get`'s own bookkeeping (map lookup + `MoveToFront`).
 
 - **Plain LRU per shard, not scan-resistant.** A large sequential scan will still evict a shard's
   entire hot working set in one pass. Production engines use a scan-resistant policy (CLOCK-Pro,
-  or InnoDB's split young/old LRU) precisely to avoid this; hcdb does not yet.
+  or InnoDB's split young/old LRU) precisely to avoid this; HCDB does not yet.
 - **Sharding is unweighted and fixed at 16.** Every shard gets an equal slice of the entry budget
   regardless of actual key distribution, and `DEFAULT_CACHE_SHARD_COUNT` isn't tuned against a
   real contention measurement.
