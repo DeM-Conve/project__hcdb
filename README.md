@@ -57,7 +57,6 @@ https://github.com/user-attachments/assets/fb1c9b05-b645-4d15-a10c-32d7fe19f583
 
 ## Project Structure
 
-- `main.go` — small demo / entrypoint (library usage, no network server)
 - `go.mod`, `go.sum` — Go module (`github.com/DeM-Conve/project__hcdb`)
 - `Dockerfile`, `docker-compose.yml`, `.env.example`, `.dockerignore` — container image and
   compose wiring for `cmd/hcdb-server` (see [docs/deployment.md](docs/deployment.md))
@@ -86,7 +85,9 @@ https://github.com/user-attachments/assets/fb1c9b05-b645-4d15-a10c-32d7fe19f583
 ```bash
 git clone https://github.com/DeM-Conve/project__hcdb
 cd project__hcdb
-go run main.go
+
+# run the full test suite
+go test ./...
 
 # run full benchmark suite
 go test ./bench/ -bench=. -benchtime=5s -benchmem
@@ -98,11 +99,15 @@ go test ./bench/ -bench=BenchmarkGetMissScaled -benchtime=3s -benchmem
 go test ./... -race
 ```
 
+HCDB is a library (`github.com/DeM-Conve/project__hcdb`), not a binary you run directly — import
+`db` and call `db.Open`/`Put`/`Get`/`Scan` as shown in the runnable usage example in
+[db/example_test.go](db/example_test.go) (`go test ./db/ -run Example -v`), or run it as a
+network server via `cmd/hcdb-server` below.
+
 ### Running as a server
 
-`main.go` is a library demo; to actually talk to HCDB over the network, run
-`cmd/hcdb-server`, which speaks RESP (the Redis wire protocol — see
-[docs/resp.md](docs/resp.md) and [docs/server.md](docs/server.md)):
+To actually talk to HCDB over the network, run `cmd/hcdb-server`, which speaks RESP (the Redis
+wire protocol — see [docs/resp.md](docs/resp.md) and [docs/server.md](docs/server.md)):
 
 ```bash
 go run ./cmd/hcdb-server

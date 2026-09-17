@@ -62,8 +62,8 @@ depended on by everyone, only by `sstable` (which holds the cache reference and 
 `readBlock`) and `db` (which owns the one shared instance and constructs it in `Open`).
 
 `server` sits **above** `db`, not beside its other siblings — it's a second, independent way to
-drive the same public API `main.go`'s demo uses, translating RESP commands into `db.DB` method
-calls. `resp` is lower still: a standalone wire-format package with no knowledge of `db` or
+drive the same public API [db/example_test.go](../db/example_test.go) demonstrates, translating
+RESP commands into `db.DB` method calls. `resp` is lower still: a standalone wire-format package with no knowledge of `db` or
 `server`, imported only by `server`. `cmd/hcdb-server` is the thinnest layer of all — an
 entrypoint that reads environment variables, opens a `db.DB`, and hands it to a `server.Server`.
 
