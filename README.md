@@ -19,6 +19,12 @@ still on the roadmap toward production-grade behavior. For a per-package deep di
 
 ---
 
+## Demo
+
+https://github.com/user-attachments/assets/fb1c9b05-b645-4d15-a10c-32d7fe19f583
+
+---
+
 ## Why HCDB
 
 - **Drop-in for anything that already speaks Redis.** Native RESP support means `redis-cli` and
