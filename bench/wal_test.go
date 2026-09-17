@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/hchauhan7816/hcdb/wal"
+	"github.com/DeM-Conve/project__hcdb/wal"
 )
 
 func BenchmarkWalAppend(b *testing.B) {

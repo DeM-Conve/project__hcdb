@@ -5,9 +5,9 @@ import (
 	"encoding/binary"
 	"os"
 
-	"github.com/hchauhan7816/hcdb/bloomfilter"
-	"github.com/hchauhan7816/hcdb/config"
-	"github.com/hchauhan7816/hcdb/internal/base"
+	"github.com/DeM-Conve/project__hcdb/bloomfilter"
+	"github.com/DeM-Conve/project__hcdb/config"
+	"github.com/DeM-Conve/project__hcdb/internal/base"
 )
 
 // WriteSSTableFromBlockEntries is the compaction-side writer. It produces

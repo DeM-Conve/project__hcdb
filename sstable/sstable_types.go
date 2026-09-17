@@ -1,8 +1,8 @@
 package sstable
 
 import (
-	"github.com/hchauhan7816/hcdb/bloomfilter"
-	"github.com/hchauhan7816/hcdb/cache"
+	"github.com/DeM-Conve/project__hcdb/bloomfilter"
+	"github.com/DeM-Conve/project__hcdb/cache"
 )
 
 type BlockEntry struct {

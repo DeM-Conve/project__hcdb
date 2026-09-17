@@ -8,8 +8,8 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/hchauhan7816/hcdb/db"
-	"github.com/hchauhan7816/hcdb/resp"
+	"github.com/DeM-Conve/project__hcdb/db"
+	"github.com/DeM-Conve/project__hcdb/resp"
 )
 
 // Server accepts one connection per goroutine and dispatches each parsed

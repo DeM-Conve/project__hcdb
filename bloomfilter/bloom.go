@@ -1,7 +1,7 @@
 package bloomfilter
 
 import (
-	"github.com/hchauhan7816/hcdb/config"
+	"github.com/DeM-Conve/project__hcdb/config"
 )
 
 // BloomFilter is a probabilistic data structure to check key existence.

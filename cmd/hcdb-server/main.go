@@ -21,9 +21,9 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"github.com/hchauhan7816/hcdb/config"
-	"github.com/hchauhan7816/hcdb/db"
-	"github.com/hchauhan7816/hcdb/server"
+	"github.com/DeM-Conve/project__hcdb/config"
+	"github.com/DeM-Conve/project__hcdb/db"
+	"github.com/DeM-Conve/project__hcdb/server"
 )
 
 func getenv(key, fallback string) string {

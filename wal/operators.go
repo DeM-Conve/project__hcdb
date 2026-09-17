@@ -1,6 +1,6 @@
 package wal
 
-import "github.com/hchauhan7816/hcdb/config"
+import "github.com/DeM-Conve/project__hcdb/config"
 
 func (walObj *WAL) Put(keyByte []byte, valueByte []byte) error {
 	return walObj.write(keyByte, valueByte)

@@ -1,4 +1,4 @@
-module github.com/hchauhan7816/hcdb
+module github.com/DeM-Conve/project__hcdb
 
 go 1.24.2
 

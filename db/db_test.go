@@ -4,8 +4,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/hchauhan7816/hcdb/config"
-	"github.com/hchauhan7816/hcdb/sstable"
+	"github.com/DeM-Conve/project__hcdb/config"
+	"github.com/DeM-Conve/project__hcdb/sstable"
 )
 
 // TestCrashBetweenFlushAndWALReset simulates a crash inside flushMemtable,

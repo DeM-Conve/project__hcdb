@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/hchauhan7816/hcdb/config"
-	"github.com/hchauhan7816/hcdb/db"
+	"github.com/DeM-Conve/project__hcdb/config"
+	"github.com/DeM-Conve/project__hcdb/db"
 )
 
 // ─── helpers ────────────────────────────────────────────────────────────────

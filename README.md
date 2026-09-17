@@ -1,6 +1,6 @@
-# hcdb — A Persistent Key-Value Store in Go
+# HCDB — A Persistent Key-Value Store in Go
 
-**hcdb** is an in-progress LSM-style embedded key-value engine in Go: WAL,
+**HCDB** is an in-progress LSM-style embedded key-value engine in Go: WAL,
 memtable, SSTables with a block-based layout, size-tiered compaction, atomic
 crash-safe SSTable installs, a shared sharded LRU block cache, MVCC snapshots
 backed by internal-key sequence numbers, range scans via a k-way merging
@@ -15,7 +15,7 @@ behavior. For a per-package deep dive, see [docs/](docs/).
 ## Project Structure
 
 - `main.go` — small demo / entrypoint (library usage, no network server)
-- `go.mod`, `go.sum` — Go module (`github.com/hchauhan7816/hcdb`)
+- `go.mod`, `go.sum` — Go module (`github.com/DeM-Conve/project__hcdb`)
 - `Dockerfile`, `docker-compose.yml`, `.env.example`, `.dockerignore` — container image and
   compose wiring for `cmd/hcdb-server` (see [docs/deployment.md](docs/deployment.md))
 - `config/` — defaults and DB config struct
@@ -41,7 +41,7 @@ behavior. For a per-package deep dive, see [docs/](docs/).
 ## Running
 
 ```bash
-git clone https://github.com/hchauhan7816/hcdb
+git clone https://github.com/DeM-Conve/project__hcdb
 cd hcdb
 go run main.go
 

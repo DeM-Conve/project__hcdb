@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/hchauhan7816/hcdb/internal/base"
-	"github.com/hchauhan7816/hcdb/sstable"
+	"github.com/DeM-Conve/project__hcdb/internal/base"
+	"github.com/DeM-Conve/project__hcdb/sstable"
 )
 
 func mergeGroup(tables []*sstable.SSTable, dirPath string, floor base.SeqNum) (*sstable.SSTable, error) {

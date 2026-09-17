@@ -7,8 +7,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/hchauhan7816/hcdb/config"
-	"github.com/hchauhan7816/hcdb/internal/base"
+	"github.com/DeM-Conve/project__hcdb/config"
+	"github.com/DeM-Conve/project__hcdb/internal/base"
 )
 
 func openTestDB(t *testing.T, dir string) *DB {

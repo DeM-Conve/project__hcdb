@@ -7,7 +7,7 @@ import (
 	"hash/crc32"
 	"io"
 
-	"github.com/hchauhan7816/hcdb/config"
+	"github.com/DeM-Conve/project__hcdb/config"
 )
 
 type countingReader struct {

@@ -3,7 +3,7 @@ package compaction
 import (
 	"os"
 
-	"github.com/hchauhan7816/hcdb/sstable"
+	"github.com/DeM-Conve/project__hcdb/sstable"
 )
 
 func groupBySimilarSize(tables []*sstable.SSTable) [][]*sstable.SSTable {

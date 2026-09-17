@@ -3,8 +3,8 @@ package db
 import (
 	"fmt"
 
-	"github.com/hchauhan7816/hcdb/config"
-	"github.com/hchauhan7816/hcdb/internal/base"
+	"github.com/DeM-Conve/project__hcdb/config"
+	"github.com/DeM-Conve/project__hcdb/internal/base"
 )
 
 // Enforced on write too, not just WAL replay — an oversized record accepted

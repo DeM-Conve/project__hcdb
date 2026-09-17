@@ -4,12 +4,12 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/hchauhan7816/hcdb/cache"
-	"github.com/hchauhan7816/hcdb/config"
-	"github.com/hchauhan7816/hcdb/internal/base"
-	"github.com/hchauhan7816/hcdb/memtable"
-	"github.com/hchauhan7816/hcdb/sstable"
-	"github.com/hchauhan7816/hcdb/wal"
+	"github.com/DeM-Conve/project__hcdb/cache"
+	"github.com/DeM-Conve/project__hcdb/config"
+	"github.com/DeM-Conve/project__hcdb/internal/base"
+	"github.com/DeM-Conve/project__hcdb/memtable"
+	"github.com/DeM-Conve/project__hcdb/sstable"
+	"github.com/DeM-Conve/project__hcdb/wal"
 )
 
 type DB struct {

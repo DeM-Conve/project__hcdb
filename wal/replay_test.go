@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/hchauhan7816/hcdb/faultinjection"
+	"github.com/DeM-Conve/project__hcdb/faultinjection"
 )
 
 // TestTornWriteRecovery: crash mid-write via FaultyWriter, then assert

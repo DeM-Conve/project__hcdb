@@ -5,7 +5,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/hchauhan7816/hcdb/memtable"
+	"github.com/DeM-Conve/project__hcdb/memtable"
 )
 
 func BenchmarkMemtablePut(b *testing.B) {

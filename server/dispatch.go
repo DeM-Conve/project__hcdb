@@ -3,8 +3,8 @@ package server
 import (
 	"strings"
 
-	"github.com/hchauhan7816/hcdb/db"
-	"github.com/hchauhan7816/hcdb/resp"
+	"github.com/DeM-Conve/project__hcdb/db"
+	"github.com/DeM-Conve/project__hcdb/resp"
 )
 
 func dispatch(database *db.DB, cmd resp.Value) resp.Value {
