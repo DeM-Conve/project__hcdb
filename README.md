@@ -21,7 +21,7 @@ still on the roadmap toward production-grade behavior. For a per-package deep di
 
 ## Demo
 
-https://github.com/user-attachments/assets/fb1c9b05-b645-4d15-a10c-32d7fe19f583
+https://github.com/user-attachments/assets/16afab77-28fc-4c9f-b8f7-0c5ff18de86f
 
 ---
 
