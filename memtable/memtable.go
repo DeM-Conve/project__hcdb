@@ -3,9 +3,9 @@ package memtable
 import (
 	"bytes"
 
-	"github.com/google/btree"
 	"github.com/DeM-Conve/project__hcdb/config"
 	"github.com/DeM-Conve/project__hcdb/internal/base"
+	"github.com/google/btree"
 )
 
 // Less orders by user key ascending, then sequence number descending, so the

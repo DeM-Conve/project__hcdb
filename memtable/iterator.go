@@ -3,8 +3,8 @@ package memtable
 import (
 	"bytes"
 
-	"github.com/google/btree"
 	"github.com/DeM-Conve/project__hcdb/internal/base"
+	"github.com/google/btree"
 )
 
 // Iterator eagerly collects entries in [lowerBound, upperBound] into a sorted
