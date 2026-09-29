@@ -1,5 +1,11 @@
 # HCDB — A Durable LSM-Tree Database, Speaking the Redis Protocol
 
+[![CI](https://github.com/DeM-Conve/project__hcdb/actions/workflows/ci.yml/badge.svg)](https://github.com/DeM-Conve/project__hcdb/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/DeM-Conve/project__hcdb.svg)](https://pkg.go.dev/github.com/DeM-Conve/project__hcdb)
+[![Go Report Card](https://goreportcard.com/badge/github.com/DeM-Conve/project__hcdb)](https://goreportcard.com/report/github.com/DeM-Conve/project__hcdb)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/DeM-Conve/project__hcdb?sort=semver)](https://github.com/DeM-Conve/project__hcdb/releases)
+
 **HCDB** is an LSM/SSTable-based key-value database, built the same way LevelDB and RocksDB
 are — WAL, memtable, block-based SSTables, size-tiered compaction, MVCC snapshots — but it talks
 to your application over RESP, the wire protocol Redis already speaks. Point `redis-cli`, or any
@@ -550,3 +556,15 @@ Rough priority order for hardening and extending HCDB:
 8. **Real cursor-based `SCAN`** in `server/` — bounded-batch, resumable iteration instead of the
    current one-shot range scan (see Known Limitations item 8), plus authentication and
    transactions (`MULTI`/`EXEC`) if HCDB's RESP surface grows further.
+
+---
+
+## Contributing
+
+Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the trunk-based workflow,
+and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). Report security issues privately per
+[SECURITY.md](SECURITY.md). Notable changes are tracked in [CHANGELOG.md](CHANGELOG.md).
+
+## License
+
+HCDB is released under the [MIT License](LICENSE).
